@@ -33,6 +33,8 @@ function pmtilesRange() {
 }
 
 export default defineConfig({
+  // Subpath deploys (e.g. GitHub Pages /taxmap/): BASE_PATH=/taxmap/ npm run build
+  base: process.env.BASE_PATH || "/",
   plugins: [react(), pmtilesRange()],
   server: { port: Number(process.env.PORT) || 5173 },
 });

@@ -19,8 +19,10 @@ const rateColor = ["interpolate", ["linear"], ["get", "rate"], ...RATE_STOPS.fla
 const fmtUSD = (n) =>
   n?.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }) ?? "—";
 
-// Tiles served from /tiles in dev; set VITE_TILES_URL to the R2 custom domain in prod.
-const TILES_BASE = import.meta.env.VITE_TILES_URL || `${location.origin}/tiles`;
+// Tiles served from <base>/tiles by default; set VITE_TILES_URL to an external
+// host (e.g. R2 custom domain) to serve them elsewhere.
+const TILES_BASE =
+  import.meta.env.VITE_TILES_URL || `${location.origin}${import.meta.env.BASE_URL}tiles`;
 
 // TX general school homestead exemption (2025): $140,000.
 const SCHOOL_HS_EXEMPTION = 140000;
@@ -68,9 +70,15 @@ export default function App() {
     window.__map = map;
 
     map.on("load", () => {
+      // Two archives so each stays under GitHub's 100MB file limit:
+      // county + ISD + non-Bexar parcels in one, Bexar parcels in the other.
       map.addSource("taxes", {
         type: "vector",
-        url: `pmtiles://${TILES_BASE}/metro-2025.pmtiles`,
+        url: `pmtiles://${TILES_BASE}/metro-rest-2025.pmtiles`,
+      });
+      map.addSource("taxes-bx", {
+        type: "vector",
+        url: `pmtiles://${TILES_BASE}/bexar-parcels-2025.pmtiles`,
       });
 
       // Insert beneath the basemap's first symbol layer so street/city labels
@@ -123,30 +131,32 @@ export default function App() {
         },
         firstSymbol
       );
-      map.addLayer(
-        {
-          id: "parcel-fill",
-          type: "fill",
-          source: "taxes",
-          "source-layer": "parcels",
-          minzoom: 13,
-          paint: { "fill-color": rateColor, "fill-opacity": 0.7 },
-        },
-        firstSymbol
-      );
-      map.addLayer(
-        {
-          id: "parcel-line",
-          type: "line",
-          source: "taxes",
-          "source-layer": "parcels",
-          minzoom: 14.5,
-          paint: { "line-color": "#fcfcfb", "line-width": 0.5 },
-        },
-        firstSymbol
-      );
+      for (const [suffix, src] of [["", "taxes"], ["-bx", "taxes-bx"]]) {
+        map.addLayer(
+          {
+            id: `parcel-fill${suffix}`,
+            type: "fill",
+            source: src,
+            "source-layer": "parcels",
+            minzoom: 13,
+            paint: { "fill-color": rateColor, "fill-opacity": 0.7 },
+          },
+          firstSymbol
+        );
+        map.addLayer(
+          {
+            id: `parcel-line${suffix}`,
+            type: "line",
+            source: src,
+            "source-layer": "parcels",
+            minzoom: 14.5,
+            paint: { "line-color": "#fcfcfb", "line-width": 0.5 },
+          },
+          firstSymbol
+        );
+      }
 
-      map.on("click", "parcel-fill", (e) => {
+      const onParcelClick = (e) => {
         const p = e.features[0].properties;
         const est = p.mkt > 0 ? (p.mkt * p.rate) / 100 : null;
         const defaultPrice = p.mkt > 0 ? p.mkt : 300000;
@@ -184,7 +194,9 @@ export default function App() {
         };
         input.addEventListener("input", update);
         update();
-      });
+      };
+      map.on("click", "parcel-fill", onParcelClick);
+      map.on("click", "parcel-fill-bx", onParcelClick);
       const aggregateCard = (label) => (e) => {
         const p = e.features[0].properties;
         new maplibregl.Popup({ maxWidth: "300px" })
@@ -206,7 +218,7 @@ export default function App() {
         aggregateCard("")(e);
       });
       map.on("click", "county-fill", aggregateCard(" County"));
-      for (const id of ["parcel-fill", "isd-fill", "county-fill"]) {
+      for (const id of ["parcel-fill", "parcel-fill-bx", "isd-fill", "county-fill"]) {
         map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
         map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
       }
