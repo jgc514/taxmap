@@ -188,6 +188,7 @@ def main():
         print("loading TIGER boundaries (metro bbox) ...")
         _load_geodata(con)
 
+    _load_side_attrs(con)
     _attach_rates_and_export(con, city_rates, isd_rates)
     print("done.")
     return 0
@@ -248,6 +249,23 @@ def _load_geodata(con):
     print("parcels total:", con.execute("SELECT count(*) FROM parcels_all").fetchone()[0])
 
 
+def _load_side_attrs(con):
+    """Owner + acreage per parcel (attribute-only read of the shapefiles;
+    no spatial ops, so it's cheap to rebuild every run)."""
+    con.execute(
+        """CREATE OR REPLACE TABLE parcel_attrs(
+           county TEXT, prop_id TEXT, owner TEXT, gis_area DOUBLE)"""
+    )
+    for cname, cfg in COUNTIES.items():
+        shp = parcels_shp(cfg["fips"])
+        con.execute(
+            f"""INSERT INTO parcel_attrs
+            SELECT '{cname}', Prop_ID, any_value(OWNER_NAME), any_value(GIS_AREA)
+            FROM ST_Read('{shp}') GROUP BY Prop_ID"""
+        )
+    print("parcel_attrs:", con.execute("SELECT count(*) FROM parcel_attrs").fetchone()[0])
+
+
 def _attach_rates_and_export(con, city_rates, isd_rates):
     unmatched = set()
     city_map, isd_map = [], []
@@ -290,9 +308,14 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
         f"""COPY (
           SELECT p.prop_id AS id, p.addr, p.mkt::BIGINT AS mkt, round(p.nominal_rate, 4) AS rate,
                  round(coalesce(i.rate, 0), 4) AS isdr,
-                 p.isd_name AS isd, p.city_name AS cj, p.county AS cty, p.geom
+                 p.isd_name AS isd, p.city_name AS cj, p.county AS cty,
+                 a.owner AS own,
+                 round(CASE WHEN coalesce(a.gis_area, 0) > 0 THEN a.gis_area
+                       ELSE ST_Area_Spheroid(p.geom) / 4046.8564 END, 3) AS ac,
+                 p.geom
           FROM parcels_rated p
           LEFT JOIN isd_rate_map i USING (isd_name)
+          LEFT JOIN parcel_attrs a ON a.county = p.county AND a.prop_id = p.prop_id
         ) TO '{BUILD / "parcels.geojsonseq"}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')"""
     )
 

@@ -19,6 +19,16 @@ const rateColor = ["interpolate", ["linear"], ["get", "rate"], ...RATE_STOPS.fla
 const fmtUSD = (n) =>
   n?.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }) ?? "—";
 
+const fmtAcres = (ac) => {
+  const n = Number(ac);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  return n < 1
+    ? `${n.toFixed(2)} ac (${Math.round(n * 43560).toLocaleString()} sq ft)`
+    : `${n.toFixed(2)} ac`;
+};
+
+const NO_SELECTION = ["==", ["get", "id"], "__none__"];
+
 // Tiles served from <base>/tiles by default; set VITE_TILES_URL to an external
 // host (e.g. R2 custom domain) to serve them elsewhere.
 const TILES_BASE =
@@ -149,12 +159,36 @@ export default function App() {
             type: "line",
             source: src,
             "source-layer": "parcels",
-            minzoom: 14.5,
-            paint: { "line-color": "#fcfcfb", "line-width": 0.5 },
+            minzoom: 13,
+            paint: {
+              "line-color": "#4a4943",
+              "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.3, 15, 0.75, 17, 1.5],
+              "line-opacity": ["interpolate", ["linear"], ["zoom"], 13, 0.35, 16, 0.8],
+            },
+          },
+          firstSymbol
+        );
+        map.addLayer(
+          {
+            id: `parcel-selected${suffix}`,
+            type: "line",
+            source: src,
+            "source-layer": "parcels",
+            minzoom: 13,
+            filter: NO_SELECTION,
+            paint: {
+              "line-color": "#1849c6",
+              "line-width": 3,
+              "line-opacity": 0.95,
+            },
           },
           firstSymbol
         );
       }
+      const setSelection = (filter) => {
+        map.setFilter("parcel-selected", filter);
+        map.setFilter("parcel-selected-bx", filter);
+      };
 
       const onParcelClick = (e) => {
         const p = e.features[0].properties;
@@ -167,6 +201,8 @@ export default function App() {
               <div class="card-addr">${p.addr || "(no situs address)"}</div>
               <div class="card-rate">${Number(p.rate).toFixed(4)}%<span> nominal rate</span></div>
               <table>
+                <tr><td>Owner</td><td>${p.own || "—"}</td></tr>
+                <tr><td>Lot size</td><td>${fmtAcres(p.ac)}</td></tr>
                 <tr><td>Market value</td><td>${fmtUSD(p.mkt)}</td></tr>
                 <tr><td>Est. annual tax</td><td>${est ? fmtUSD(est) : "—"}</td></tr>
                 <tr><td>School district</td><td>${p.isd || "—"}</td></tr>
@@ -194,6 +230,8 @@ export default function App() {
         };
         input.addEventListener("input", update);
         update();
+        setSelection(["all", ["==", ["get", "id"], p.id], ["==", ["get", "cty"], p.cty]]);
+        popup.on("close", () => setSelection(NO_SELECTION));
       };
       map.on("click", "parcel-fill", onParcelClick);
       map.on("click", "parcel-fill-bx", onParcelClick);
