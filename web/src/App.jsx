@@ -3,16 +3,16 @@ import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-// Sequential blue ramp (validated reference palette, steps 100->700).
-// Domain: SA-metro nominal rates, % of value per year.
+// Sequential yellow-orange-red ramp (ColorBrewer YlOrRd 7-class) — low rates
+// cool yellow, high rates deep red. Domain: SA-metro nominal rates, %/year.
 const RATE_STOPS = [
-  [1.3, "#cde2fb"],
-  [1.52, "#9ec5f4"],
-  [1.73, "#6da7ec"],
-  [1.95, "#3987e5"],
-  [2.17, "#256abf"],
-  [2.38, "#184f95"],
-  [2.6, "#0d366b"],
+  [1.3, "#ffffb2"],
+  [1.52, "#fed976"],
+  [1.73, "#feb24c"],
+  [1.95, "#fd8d3c"],
+  [2.17, "#fc4e2a"],
+  [2.38, "#e31a1c"],
+  [2.6, "#b10026"],
 ];
 const rateColor = ["interpolate", ["linear"], ["get", "rate"], ...RATE_STOPS.flat()];
 
