@@ -50,3 +50,27 @@ Then Pages → custom domain → `<yourdomain>` (first deploy only).
 2. `pipeline/download_phase0.sh` (+ county roll downloads)
 3. `.venv/bin/python pipeline/build_metro.py && pipeline/build_tiles.sh`
 4. Upload as `metro-<year>.pmtiles`, update `VITE_TILES_URL`/archive name, redeploy.
+
+## Current deployment: GitHub Pages (live since 2026-07-17)
+
+The map is live at https://jgc514.github.io/taxmap/ — gh-pages branch holds the
+built site plus `tiles/` (two archives, each under GitHub's 100MB/file limit).
+
+Redeploy steps:
+```bash
+cd web && BASE_PATH=/taxmap/ npm run build
+cp -R dist/. <scratch-ghpages-clone>/ && cd <scratch-ghpages-clone>
+git add -A && git commit -m "Deploy" && git push -f origin gh-pages
+# needs: git config http.postBuffer 524288000 (large first push)
+```
+
+**IMPORTANT — warm the CDN after every deploy:** GitHub's CDN answers range
+requests with 200-full-file while its cache is cold, which breaks PMTiles
+("Check that your storage backend supports HTTP Byte Serving"). One full GET
+of each archive fixes it:
+```bash
+curl -so /dev/null https://jgc514.github.io/taxmap/tiles/metro-rest-2025.pmtiles
+curl -so /dev/null https://jgc514.github.io/taxmap/tiles/bexar-parcels-2025.pmtiles
+```
+(The Cloudflare R2 path above remains the long-term home — no cold-cache issue,
+single archive, custom domain.)
