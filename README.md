@@ -1,8 +1,12 @@
-# taxmap — SA Metro Property-Tax Heat Map
+# taxmap — South-Central Texas Property-Tax Heat Map
 
 Interactive drill-down heat map of property tax rates: county → city / school
 district → subdivision → individual parcel. Built entirely from free public
 data (TxGIO statewide parcels, Comptroller PTAD rates, CAD appraisal rolls).
+
+Coverage: 63 counties — Bexar plus every county within 4 adjacency rings
+(San Antonio, Austin metro, Corpus Christi, Laredo, Del Rio, Victoria;
+computed by `pipeline/county_rings.py`). ~3.7M parcels, tax year 2025.
 
 Full plan: see `docs/PLAN.md`.
 
@@ -17,11 +21,13 @@ Full plan: see `docs/PLAN.md`.
 ## Pipeline quickstart
 ```
 python3 -m venv .venv && .venv/bin/pip install duckdb openpyxl pdfplumber
-pipeline/download_phase0.sh                  # + county zips (see build_metro.py)
-.venv/bin/python pipeline/build_metro.py     # all 8 counties → geojsonseq layers
-pipeline/build_tiles.sh                      # → data/build/metro-2025.pmtiles
+pipeline/download_phase0.sh                  # shared boundary/rate sources
+pipeline/download_ring4.sh                   # ring 2-4 county parcel zips
+.venv/bin/python pipeline/build_region.py    # all 63 counties → geojsonseq layers
+pipeline/build_tiles_region.sh               # → 8 pmtiles archives (<100MB each)
 cd web && npm install && npm run dev
 ```
+(`build_metro.py`/`build_tiles.sh` are the superseded 8-county versions.)
 
 ## Tax years & data vintages
 Everything is keyed by `tax_year`. Current build: 2025 certified data

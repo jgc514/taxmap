@@ -4,14 +4,15 @@ import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // Sequential yellow-orange-red ramp (ColorBrewer YlOrRd 7-class) — low rates
-// cool yellow, high rates deep red. Domain: SA-metro nominal rates, %/year.
+// cool yellow, high rates deep red. Domain: south-central TX nominal rates,
+// %/year (floor lowered from 1.3 to 1.0 for the low-tax Hill Country counties).
 const RATE_STOPS = [
-  [1.3, "#ffffb2"],
-  [1.52, "#fed976"],
-  [1.73, "#feb24c"],
-  [1.95, "#fd8d3c"],
-  [2.17, "#fc4e2a"],
-  [2.38, "#e31a1c"],
+  [1.0, "#ffffb2"],
+  [1.27, "#fed976"],
+  [1.53, "#feb24c"],
+  [1.8, "#fd8d3c"],
+  [2.07, "#fc4e2a"],
+  [2.33, "#e31a1c"],
   [2.6, "#b10026"],
 ];
 const rateColor = ["interpolate", ["linear"], ["get", "rate"], ...RATE_STOPS.flat()];
@@ -34,6 +35,22 @@ const NO_SELECTION = ["==", ["get", "id"], "__none__"];
 const TILES_BASE =
   import.meta.env.VITE_TILES_URL || `${location.origin}${import.meta.env.BASE_URL}tiles`;
 
+// Parcel tile archives (each under GitHub's 100MB file limit). Suffix keys
+// the per-archive source + layer ids; "" is the metro-rest archive, which
+// also carries the county + ISD overview layers for the whole 63-county
+// region (Bexar + 4 adjacency rings).
+const PARCEL_SOURCES = [
+  ["", "metro-rest-2025"],
+  ["-bx", "bexar-parcels-2025"],
+  ["-ta", "travis-a-2025"],
+  ["-tb", "travis-b-2025"],
+  ["-cn", "central-north-2025"],
+  ["-cs", "central-south-2025"],
+  ["-we", "west-2025"],
+  ["-so", "south-2025"],
+  ["-cl", "coastal-2025"],
+];
+
 // TX general school homestead exemption (2025): $140,000.
 const SCHOOL_HS_EXEMPTION = 140000;
 
@@ -50,7 +67,7 @@ const initialView = () => {
   if (Number.isFinite(lat) && Number.isFinite(lng)) {
     return { center: [lng, lat], zoom: Number.isFinite(z) ? z : 15 };
   }
-  return { center: [-98.6, 29.42], zoom: 8.1 };
+  return { center: [-98.4, 29.1], zoom: 6.3 };
 };
 
 export default function App() {
@@ -80,16 +97,12 @@ export default function App() {
     window.__map = map;
 
     map.on("load", () => {
-      // Two archives so each stays under GitHub's 100MB file limit:
-      // county + ISD + non-Bexar parcels in one, Bexar parcels in the other.
-      map.addSource("taxes", {
-        type: "vector",
-        url: `pmtiles://${TILES_BASE}/metro-rest-2025.pmtiles`,
-      });
-      map.addSource("taxes-bx", {
-        type: "vector",
-        url: `pmtiles://${TILES_BASE}/bexar-parcels-2025.pmtiles`,
-      });
+      for (const [suffix, archive] of PARCEL_SOURCES) {
+        map.addSource(`taxes${suffix}`, {
+          type: "vector",
+          url: `pmtiles://${TILES_BASE}/${archive}.pmtiles`,
+        });
+      }
 
       // Insert beneath the basemap's first symbol layer so street/city labels
       // stay readable above the choropleth.
@@ -141,7 +154,8 @@ export default function App() {
         },
         firstSymbol
       );
-      for (const [suffix, src] of [["", "taxes"], ["-bx", "taxes-bx"]]) {
+      for (const [suffix] of PARCEL_SOURCES) {
+        const src = `taxes${suffix}`;
         map.addLayer(
           {
             id: `parcel-fill${suffix}`,
@@ -186,8 +200,7 @@ export default function App() {
         );
       }
       const setSelection = (filter) => {
-        map.setFilter("parcel-selected", filter);
-        map.setFilter("parcel-selected-bx", filter);
+        for (const [suffix] of PARCEL_SOURCES) map.setFilter(`parcel-selected${suffix}`, filter);
       };
 
       const onParcelClick = (e) => {
@@ -208,7 +221,7 @@ export default function App() {
                 <tr><td>School district</td><td>${p.isd || "—"}</td></tr>
                 <tr><td>City</td><td>${p.cj || "Unincorporated"}</td></tr>
                 <tr><td>County</td><td>${p.cty}</td></tr>
-                <tr><td>Property ID</td><td>${p.id}</td></tr>
+                <tr><td>Property ID</td><td>${p.id && p.id !== "0" ? p.id : "—"}</td></tr>
               </table>
               <div class="buyer">
                 <div class="buyer-title">Buyer estimate</div>
@@ -230,11 +243,16 @@ export default function App() {
         };
         input.addEventListener("input", update);
         update();
-        setSelection(["all", ["==", ["get", "id"], p.id], ["==", ["get", "cty"], p.cty]]);
+        // Prop_ID '0' means the CAD shared no id (much of Travis): an id-based
+        // outline would light up every such parcel in the county, so skip it.
+        if (p.id && p.id !== "0") {
+          setSelection(["all", ["==", ["get", "id"], p.id], ["==", ["get", "cty"], p.cty]]);
+        } else {
+          setSelection(NO_SELECTION);
+        }
         popup.on("close", () => setSelection(NO_SELECTION));
       };
-      map.on("click", "parcel-fill", onParcelClick);
-      map.on("click", "parcel-fill-bx", onParcelClick);
+      for (const [suffix] of PARCEL_SOURCES) map.on("click", `parcel-fill${suffix}`, onParcelClick);
       const aggregateCard = (label) => (e) => {
         const p = e.features[0].properties;
         new maplibregl.Popup({ maxWidth: "300px" })
@@ -256,7 +274,7 @@ export default function App() {
         aggregateCard("")(e);
       });
       map.on("click", "county-fill", aggregateCard(" County"));
-      for (const id of ["parcel-fill", "parcel-fill-bx", "isd-fill", "county-fill"]) {
+      for (const id of [...PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`), "isd-fill", "county-fill"]) {
         map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
         map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
       }
@@ -275,8 +293,8 @@ export default function App() {
     <div className="app">
       <div ref={mapDiv} className="map" />
       <header className="topbar">
-        <h1>SA Metro Property Tax Map</h1>
-        <span className="badge">v0 · 8-county SA metro · 2025 · jurisdictions approximate</span>
+        <h1>South-Central Texas Property Tax Map</h1>
+        <span className="badge">v0 · 63 counties (SA + Austin + coast) · 2025 · jurisdictions approximate</span>
       </header>
       <div className="legend">
         <div className="legend-title">Nominal tax rate (% of value)</div>

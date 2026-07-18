@@ -1,7 +1,7 @@
 {
-  "name": "SA Metro Property Tax Map",
+  "name": "South-Central Texas Property Tax Map",
   "short_name": "TaxMap",
-  "description": "Interactive property-tax heat map for the San Antonio metro — drill from county to individual parcel.",
+  "description": "Interactive property-tax heat map for 63 south-central Texas counties — drill from county to individual parcel.",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#fcfcfb",

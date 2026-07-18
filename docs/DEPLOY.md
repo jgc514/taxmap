@@ -54,7 +54,8 @@ Then Pages → custom domain → `<yourdomain>` (first deploy only).
 ## Current deployment: GitHub Pages (live since 2026-07-17)
 
 The map is live at https://jgc514.github.io/taxmap/ — gh-pages branch holds the
-built site plus `tiles/` (two archives, each under GitHub's 100MB/file limit).
+built site plus `tiles/` (8 archives, each under GitHub's 100MB/file limit;
+region membership defined in `pipeline/build_region.py`).
 
 Redeploy steps:
 ```bash
@@ -69,8 +70,10 @@ requests with 200-full-file while its cache is cold, which breaks PMTiles
 ("Check that your storage backend supports HTTP Byte Serving"). One full GET
 of each archive fixes it:
 ```bash
-curl -so /dev/null https://jgc514.github.io/taxmap/tiles/metro-rest-2025.pmtiles
-curl -so /dev/null https://jgc514.github.io/taxmap/tiles/bexar-parcels-2025.pmtiles
+for a in metro-rest-2025 bexar-parcels-2025 travis-a-2025 travis-b-2025 \
+         central-north-2025 central-south-2025 west-2025 south-2025 coastal-2025; do
+  curl -so /dev/null "https://jgc514.github.io/taxmap/tiles/$a.pmtiles"
+done
 ```
 (The Cloudflare R2 path above remains the long-term home — no cold-cache issue,
 single archive, custom domain.)

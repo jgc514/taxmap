@@ -121,6 +121,20 @@ Scaffold repo (`~/taxmap`, new git repo). Download TxGIO Bexar parcels (311 MB) 
 **Phase 1 — Metro fan-out + full drill-down UX.**
 Run the other 7 TxGIO county files through the same pipeline (uniform format — cheap). Aggregate dissolves (county/city/ISD/subdivision from CAD subdivision attributes where present), zoom-banded layer handoffs, legend, nominal/effective toggle (effective-rate layer appears per-county as roll data lands), click card v1, address/subdivision search. "Approximate jurisdictions" badge until rolls integrate.
 
+**Phase 1x — Ring-4 expansion (shipped 2026-07-17).**
+Coverage extended from the 8-county metro to all 63 counties within 4
+adjacency rings of Bexar (`pipeline/county_rings.py`): adds Austin metro
+(Travis/Williamson/Hays/Bell), Corpus Christi, Laredo, Del Rio, Victoria —
+~3.6M parcels. Same v0 spatial-join method (`pipeline/build_region.py`),
+county-wide units curated per county from PTAD + Comptroller county
+directories. Tiles ship as 9 sub-100MB archives (`build_tiles_region.sh`).
+Known v0 gaps by design: partial districts (ESD/MUD/WCID), city-scoped
+college/hospital districts (ACC, Del Mar, Laredo College, CTC/TJC, Bellville/
+Nixon/Yoakum/Rice/DeWitt+Lavaca hospital districts), Menard UWD's anomalous
+0.64 rate (excluded pending verification). Gotchas encoded in the pipeline:
+PTAD-vs-FIPS "Mc" ordering, mixed CRS across StratMap vintages (2025-05 batch
+is Web Mercator), Travis Prop_ID='0' for ~430k parcels.
+
 **Phase 2 — Authoritative rolls + buyer mode.**
 Parser for the CAD vendor text-report format → ingest the 3 free rolls (Guadalupe, Wilson, Bandera). Integrate PIA rolls as they arrive (Bexar first priority). Upgrades per county: exact jurisdiction stacks (incl. ESD/MUD/special districts), exemptions, taxable value per unit → true effective rate + current-owner bill. Buyer-mode calculator on the card (rates + exemption schedules + entered price — ships even before all rolls arrive).
 
