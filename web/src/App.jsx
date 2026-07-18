@@ -39,8 +39,14 @@ const TILES_BASE =
 // pipeline/build_tiles_region.sh. The first entry (metro-rest) also carries
 // the county + ISD overview layers. Suffix keys the per-archive source +
 // layer ids; "" is the metro-rest archive.
+// Entries are either a bare archive name (served from TILES_BASE) or
+// {name, url} for archives hosted elsewhere (overflow tile repos / R2).
 import ARCHIVES from "./archives.json";
-const PARCEL_SOURCES = ARCHIVES.map((name, i) => [i === 0 ? "" : `-${i}`, name]);
+const PARCEL_SOURCES = ARCHIVES.map((entry, i) => [
+  i === 0 ? "" : `-${i}`,
+  typeof entry === "string" ? entry : entry.name,
+  typeof entry === "string" ? null : entry.url,
+]);
 
 // Free federal raster services: USGS basemaps + FEMA National Flood Hazard
 // Layer (layer 28 = flood hazard zones, drawn via dynamic export tiles).
@@ -239,10 +245,10 @@ export default function App() {
     mapRef.current = map;
 
     map.on("load", () => {
-      for (const [suffix, archive] of PARCEL_SOURCES) {
+      for (const [suffix, archive, url] of PARCEL_SOURCES) {
         map.addSource(`taxes${suffix}`, {
           type: "vector",
-          url: `pmtiles://${TILES_BASE}/${archive}.pmtiles`,
+          url: `pmtiles://${url || `${TILES_BASE}/${archive}.pmtiles`}`,
         });
       }
 
