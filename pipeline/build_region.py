@@ -409,7 +409,62 @@ COUNTIES = {
     },
 }
 
-REGIONS = sorted({c["region"] for c in COUNTIES.values()})
+# Pristine hand-curated set, snapshotted before the statewide merge below —
+# gen_recipes.py imports this to know which counties NOT to auto-generate.
+HAND_CURATED = dict(COUNTIES)
+
+
+def _load_statewide():
+    """Merge auto-generated recipes (gen_recipes.py) for the rest of Texas,
+    packing new counties into archive regions by a north-to-south geographic
+    sweep with a parcel budget (oversized single counties get their own
+    region; the tile script splits any oversized export into parts)."""
+    try:
+        from recipes_statewide import STATEWIDE_COUNTIES
+    except ImportError:
+        return
+    import glob as _glob
+    import struct as _struct
+
+    budget = 550_000
+    entries = []
+    for cname, r in STATEWIDE_COUNTIES.items():
+        hits = _glob.glob(str(RAW / f"stratmap_{r['fips']}/**/*.dbf"), recursive=True)
+        n = _struct.unpack("<I", Path(hits[0]).read_bytes()[4:8])[0] if hits else 0
+        entries.append((cname, r, n))
+
+    import duckdb as _duckdb
+    con = _duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    cent = dict(
+        con.execute(
+            f"""SELECT GEOID, [ST_X(ST_Centroid(geom)), ST_Y(ST_Centroid(geom))]
+            FROM ST_Read('/vsizip/{COUNTY_ZIP}/tl_2025_us_county.shp')
+            WHERE STATEFP = '48'"""
+        ).fetchall()
+    )
+    # Snake sweep: 1.5-degree latitude bands north->south, alternating east/west.
+    def sweep_key(e):
+        lon, lat = cent[e[1]["fips"]]
+        band = -round(lat / 1.5)
+        return (band, lon if band % 2 == 0 else -lon)
+
+    entries.sort(key=sweep_key)
+    region_i, acc = 0, 0
+    for cname, r, n in entries:
+        if acc > 0 and acc + n > budget:
+            region_i += 1
+            acc = 0
+        acc += n
+        COUNTIES[cname] = {
+            "fips": r["fips"], "ptad": r["ptad"], "ring": None,
+            "region": f"tx{region_i:02d}", "countywide": r["countywide"],
+            "no_parcels": n == 0,
+        }
+
+
+_load_statewide()
+REGIONS = sorted({c["region"] for c in COUNTIES.values() if not c.get("no_parcels")})
 
 
 def norm_city(name: str) -> str:
@@ -504,22 +559,22 @@ def main():
             raise SystemExit(f"{cname}: unknown countywide unit ids {missing}")
         cfg["base"] = sum(rate_by_id[u] for u in cfg["countywide"])
         print(f"  {cname:14} ring {cfg['ring']}  base {cfg['base']:.6f} per $100")
-        assert 0.15 < cfg["base"] < 1.6, f"{cname} base out of bounds"
+        # PTAD has real zero/near-zero reports (Culberson unreported, Reagan
+        # 0.0152) — warn on the low side, hard-fail only on absurd highs.
+        assert 0 <= cfg["base"] < 1.8, f"{cname} base out of bounds"
+        if cfg["base"] < 0.15:
+            print(f"    WARNING: {cname} base {cfg['base']:.4f} — PTAD reporting gap?")
 
-    lookup_codes = {c["ptad"] for c in COUNTIES.values()} | resolve_ring5_codes(county_names)
-    in_region = {c["ptad"] for c in COUNTIES.values()}
+    # Statewide, city/ISD names collide (two "Reno"s, two "Lakeside"s, ...):
+    # keep every candidate and resolve per parcel county — prefer the unit
+    # listed in the parcel's county, then one in an adjacent county (cities
+    # and ISDs straddle county lines), else a sole statewide candidate.
     city_rates, isd_rates = {}, {}
     for _, uid, name, county, utype, rate in units:
-        if county not in lookup_codes:
-            continue
         if utype == "03":
-            key = norm_city(name)
-            if key not in city_rates or uid.split("-")[0] in in_region:
-                city_rates[key] = (name, uid, rate)
+            city_rates.setdefault(norm_city(name), []).append((name, uid, rate, county))
         elif utype == "02":
-            key = norm_isd(name)
-            if key not in isd_rates or uid.split("-")[0] in in_region:
-                isd_rates[key] = (name, uid, rate)
+            isd_rates.setdefault(norm_isd(name), []).append((name, uid, rate, county))
 
     rates_only = "--rates-only" in sys.argv  # reuse parcels_all; skip loads + spatial joins
 
@@ -588,6 +643,9 @@ def _load_geodata(con):
            county TEXT, base DOUBLE, city_name TEXT, isd_name TEXT, geom GEOMETRY)"""
     )
     for cname, cfg in COUNTIES.items():
+        if cfg.get("no_parcels"):
+            print(f"{cname}: NO PARCEL DATA (boundary-only county)")
+            continue
         shp = parcels_shp(cfg["fips"])
         gsql = parcels_geom_sql(shp)
         print(f"{cname}: {Path(shp).name}" + (" [3857->4326]" if "Transform" in gsql else ""))
@@ -624,6 +682,8 @@ def _load_side_attrs(con):
            county TEXT, prop_id TEXT, owner TEXT, gis_area DOUBLE)"""
     )
     for cname, cfg in COUNTIES.items():
+        if cfg.get("no_parcels"):
+            continue
         shp = parcels_shp(cfg["fips"])
         con.execute(
             f"""INSERT INTO parcel_attrs
@@ -633,23 +693,62 @@ def _load_side_attrs(con):
     print("parcel_attrs:", con.execute("SELECT count(*) FROM parcel_attrs").fetchone()[0])
 
 
+def _adjacency_by_ptad(con):
+    """PTAD-code adjacency between loaded counties (shared boundary)."""
+    ptad_by_fips = {c["fips"]: c["ptad"] for c in COUNTIES.values()}
+    adj = {}
+    for a, b in con.execute(
+        """SELECT a.fips, b.fips FROM county_bounds a JOIN county_bounds b
+        ON a.fips < b.fips AND ST_Intersects(a.geom, b.geom)"""
+    ).fetchall():
+        pa, pb = ptad_by_fips[a], ptad_by_fips[b]
+        adj.setdefault(pa, set()).add(pb)
+        adj.setdefault(pb, set()).add(pa)
+    return adj
+
+
 def _attach_rates_and_export(con, city_rates, isd_rates):
     unmatched = set()
+    adj = _adjacency_by_ptad(con)
+    ptad_of = {n: c["ptad"] for n, c in COUNTIES.items()}
+
+    def resolve(cands, county):
+        code = ptad_of[county]
+        if not cands:
+            return None
+        own = [c for c in cands if c[3] == code]
+        if own:
+            return own[0]
+        near = [c for c in cands if c[3] in adj.get(code, ())]
+        if near:
+            return near[0]
+        return cands[0] if len(cands) == 1 else None
+
     city_map, isd_map = [], []
-    for (cn,) in con.execute("SELECT DISTINCT city_name FROM parcels_all WHERE city_name IS NOT NULL").fetchall():
-        hit = city_rates.get(norm_city(cn))
-        city_map.append((cn, hit[0] if hit else None, hit[1] if hit else None, hit[2] if hit else 0.0))
+    for county, cn in con.execute(
+        "SELECT DISTINCT county, city_name FROM parcels_all WHERE city_name IS NOT NULL"
+    ).fetchall():
+        hit = resolve(city_rates.get(norm_city(cn)), county)
+        city_map.append((county, cn, hit[0] if hit else None, hit[1] if hit else None, hit[2] if hit else 0.0))
         if not hit:
-            unmatched.add(f"CITY\t{cn}")
-    for (iname,) in con.execute("SELECT DISTINCT isd_name FROM parcels_all WHERE isd_name IS NOT NULL").fetchall():
-        hit = isd_rates.get(norm_isd(iname))
-        isd_map.append((iname, hit[0] if hit else None, hit[1] if hit else None, hit[2] if hit else 0.0))
+            unmatched.add(f"CITY\t{cn}\t({county})")
+    for county, iname in con.execute(
+        "SELECT DISTINCT county, isd_name FROM parcels_all WHERE isd_name IS NOT NULL"
+    ).fetchall():
+        hit = resolve(isd_rates.get(norm_isd(iname)), county)
+        isd_map.append((county, iname, hit[0] if hit else None, hit[1] if hit else None, hit[2] if hit else 0.0))
         if not hit:
-            unmatched.add(f"ISD\t{iname}")
-    con.execute("CREATE OR REPLACE TABLE city_rate_map(city_name TEXT, unit_name TEXT, unit_id TEXT, rate DOUBLE)")
-    con.executemany("INSERT INTO city_rate_map VALUES (?,?,?,?)", city_map)
-    con.execute("CREATE OR REPLACE TABLE isd_rate_map(isd_name TEXT, unit_name TEXT, unit_id TEXT, rate DOUBLE)")
-    con.executemany("INSERT INTO isd_rate_map VALUES (?,?,?,?)", isd_map)
+            unmatched.add(f"ISD\t{iname}\t({county})")
+    con.execute(
+        """CREATE OR REPLACE TABLE city_rate_map(
+           county TEXT, city_name TEXT, unit_name TEXT, unit_id TEXT, rate DOUBLE)"""
+    )
+    con.executemany("INSERT INTO city_rate_map VALUES (?,?,?,?,?)", city_map)
+    con.execute(
+        """CREATE OR REPLACE TABLE isd_rate_map(
+           county TEXT, isd_name TEXT, unit_name TEXT, unit_id TEXT, rate DOUBLE)"""
+    )
+    con.executemany("INSERT INTO isd_rate_map VALUES (?,?,?,?,?)", isd_map)
     (BUILD / "unmatched.txt").write_text("\n".join(sorted(unmatched)) or "none\n")
     print(f"unmatched boundary names: {len(unmatched)}")
     for u in sorted(unmatched):
@@ -661,8 +760,8 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
                p.base + coalesce(c.rate, 0) + coalesce(i.rate, 0) AS nominal_rate,
                p.geom
         FROM parcels_all p
-        LEFT JOIN city_rate_map c USING (city_name)
-        LEFT JOIN isd_rate_map i USING (isd_name)"""
+        LEFT JOIN city_rate_map c ON c.county = p.county AND c.city_name = p.city_name
+        LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name"""
     )
     for row in con.execute(
         """SELECT county, count(*), round(min(nominal_rate),4), round(median(nominal_rate),4),
@@ -687,7 +786,7 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
                      p.geom
               FROM parcels_rated p
               JOIN county_region r ON r.county = p.county AND r.region = '{region}'
-              LEFT JOIN isd_rate_map i USING (isd_name)
+              LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name
               LEFT JOIN parcel_attrs a ON a.county = p.county AND a.prop_id = p.prop_id
             ) TO '{out}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')"""
         )
@@ -709,15 +808,20 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
     )
 
     print("writing county.geojsonseq ...")
-    name_by_fips = {c["fips"]: n for n, c in COUNTIES.items()}
-    con.execute("CREATE OR REPLACE TABLE fips_names(fips TEXT, county TEXT)")
-    con.executemany("INSERT INTO fips_names VALUES (?,?)", list(name_by_fips.items()))
+    con.execute("CREATE OR REPLACE TABLE fips_names(fips TEXT, county TEXT, base DOUBLE)")
+    con.executemany(
+        "INSERT INTO fips_names VALUES (?,?,?)",
+        [(c["fips"], n, c["base"]) for n, c in COUNTIES.items()],
+    )
+    # LEFT JOIN + coalesce: a boundary-only county (no parcel data shared,
+    # e.g. Donley) still shows its county-wide base rate on the choropleth.
     con.execute(
         f"""COPY (
-          SELECT b.county_name AS name, s.rate, s.parcels, s.med_value, b.geom
+          SELECT b.county_name AS name, coalesce(s.rate, round(f.base, 4)) AS rate,
+                 coalesce(s.parcels, 0) AS parcels, s.med_value, b.geom
           FROM county_bounds b
           JOIN fips_names f USING (fips)
-          JOIN (
+          LEFT JOIN (
             SELECT county, round(median(nominal_rate),4) AS rate, count(*) AS parcels,
                    round(median(mkt),0)::BIGINT AS med_value
             FROM parcels_rated GROUP BY county

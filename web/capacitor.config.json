@@ -1,0 +1,7 @@
+{
+  "appId": "com.jgc514.taxmap",
+  "appName": "TaxMap TX",
+  "webDir": "dist",
+  "ios": { "contentInset": "always" },
+  "android": { "allowMixedContent": false }
+}

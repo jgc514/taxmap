@@ -1,0 +1,64 @@
+name: Watch for next tax year's data
+
+# Monthly probe for the two statewide sources that gate an annual refresh:
+#   1. Comptroller PTAD adopted rates XLSX for the next tax year
+#   2. TxGIO StratMap land-parcels collection for the next vintage
+# When either appears, open (or update) a tracking issue with the refresh
+# runbook so the rebuild can start the same week the data lands.
+
+on:
+  schedule:
+    - cron: "17 14 3,17 * *"  # twice a month
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe next-year sources
+        id: probe
+        run: |
+          YEAR=$(( $(date +%Y) ))
+          NEXT=$(( YEAR + 1 ))
+          # PTAD posts "<year>-total-rates-levies.xlsx" when certified.
+          # StratMap vintages are named stratmap<yy>-landparcels.
+          found=""
+          if curl -sfI "https://comptroller.texas.gov/taxes/property-tax/docs/${YEAR}-total-rates-levies.xlsx" >/dev/null 2>&1; then
+            : # current year already integrated or pending — probe next
+          fi
+          if curl -sfI "https://comptroller.texas.gov/taxes/property-tax/docs/${NEXT}-total-rates-levies.xlsx" >/dev/null 2>&1; then
+            found="${found}PTAD ${NEXT} adopted-rates XLSX is live. "
+          fi
+          YY=$(( NEXT % 100 ))
+          n=$(curl -sf "https://api.tnris.org/api/v1/collections?search=stratmap${YY}-landparcels" | python3 -c "import json,sys; print(json.load(sys.stdin).get('count', 0))" 2>/dev/null || echo 0)
+          if [ "${n:-0}" -gt 0 ]; then
+            found="${found}StratMap ${NEXT} land-parcels collection exists on TxGIO. "
+          fi
+          echo "found=${found}" >> "$GITHUB_OUTPUT"
+          echo "next=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Open tracking issue
+        if: steps.probe.outputs.found != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUND: ${{ steps.probe.outputs.found }}
+          NEXT: ${{ steps.probe.outputs.next }}
+        run: |
+          title="Tax year ${NEXT} data is available — run the annual refresh"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --search "\"$title\" in:title" --state open --json number --jq '.[0].number // empty')
+          body="Detected: ${FOUND}
+
+          Refresh runbook (docs/DEPLOY.md):
+          1. Bump year constants + source URLs in pipeline/ scripts
+          2. pipeline/download_phase0.sh && pipeline/download_statewide.sh
+          3. python pipeline/gen_recipes.py  (review data/build/recipe-review.txt)
+          4. python pipeline/build_region.py && pipeline/build_tiles_region.sh
+          5. Deploy per docs/DEPLOY.md; warm every tiles/*.pmtiles URL"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Still available as of $(date -u +%F): ${FOUND}"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
