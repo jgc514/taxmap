@@ -491,7 +491,7 @@ def norm_isd(name: str) -> str:
     n = n.replace(" county isd", " isd")  # PTAD "Schleicher County ISD" vs TIGER "Schleicher ISD"
     n = n.replace(" collegiate ", " ")    # TIGER P-TECH rebrands (Floydada Collegiate ISD)
     n = re.sub(r"\bcisd\b", "isd", n)     # PTAD "Clyde ISD" vs TIGER "Clyde Consolidated ISD"
-    key = re.sub(r"\s+", "", n)           # space-insensitive (LaPoyner / La Poynor)
+    key = re.sub(r"[^a-z0-9]", "", n)     # punctuation/space-insensitive (LaPoyner, County-Allamoore)
     return ISD_ALIASES.get(key, key)
 
 
