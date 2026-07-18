@@ -51,13 +51,118 @@ const PARCEL_SOURCES = [
   ["-cl", "coastal-2025"],
 ];
 
-// TX general school homestead exemption (2025): $140,000.
-const SCHOOL_HS_EXEMPTION = 140000;
+// Free federal raster services: USGS basemaps + FEMA National Flood Hazard
+// Layer (layer 28 = flood hazard zones, drawn via dynamic export tiles).
+const USGS_IMAGERY =
+  "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}";
+const USGS_TOPO =
+  "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}";
+const FEMA_NFHL =
+  "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/export" +
+  "?dpi=96&transparent=true&format=png32&layers=show:28" +
+  "&bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=256,256&f=image";
 
-const buyerEstimate = (price, rate, isdRate) => {
+// ── geodesy helpers (measure tool + lot dimensions) ────────────────────
+const R_EARTH_FT = 20902231; // feet
+const toRad = (d) => (d * Math.PI) / 180;
+const distFt = ([lng1, lat1], [lng2, lat2]) => {
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R_EARTH_FT * Math.asin(Math.sqrt(a));
+};
+const bearingDeg = ([lng1, lat1], [lng2, lat2]) => {
+  const y = Math.sin(toRad(lng2 - lng1)) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lng2 - lng1));
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+};
+// Spherical polygon area (shoelace on the sphere), square feet.
+const areaSqFt = (ring) => {
+  if (ring.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [lng1, lat1] = ring[i];
+    const [lng2, lat2] = ring[(i + 1) % ring.length];
+    sum += toRad(lng2 - lng1) * (2 + Math.sin(toRad(lat1)) + Math.sin(toRad(lat2)));
+  }
+  return Math.abs((sum * R_EARTH_FT * R_EARTH_FT) / 2);
+};
+const fmtDist = (ft) =>
+  ft >= 2640 ? `${(ft / 5280).toFixed(2)} mi` : `${Math.round(ft).toLocaleString()} ft`;
+const fmtArea = (sqft) =>
+  sqft >= 21780
+    ? `${(sqft / 43560).toFixed(2)} ac`
+    : `${Math.round(sqft).toLocaleString()} sq ft`;
+
+// Per-side lot dimensions from the parcel's outer ring: merge consecutive
+// tile-geometry segments while the bearing stays within tolerance, so a
+// straight lot line densified by many vertices reads as one side.
+const lotDimensions = (geometry) => {
+  let rings = [];
+  if (geometry.type === "Polygon") rings = [geometry.coordinates[0]];
+  else if (geometry.type === "MultiPolygon")
+    rings = geometry.coordinates.map((p) => p[0]);
+  if (!rings.length) return null;
+  const ring = rings.reduce((a, b) => (areaSqFt(b) > areaSqFt(a) ? b : a));
+  const pts = ring.slice(0, -1);
+  if (pts.length < 3 || pts.length > 400) return null;
+  const angDelta = (x, y) => Math.min(Math.abs(x - y), 360 - Math.abs(x - y));
+  const runs = [];
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    const d = distFt(a, b);
+    if (d <= 0) continue;
+    const brg = bearingDeg(a, b);
+    const last = runs[runs.length - 1];
+    if (last && angDelta(brg, last.brg) < 12) {
+      last.d += d;
+      last.brg = brg;
+    } else {
+      runs.push({ d, brg, brg0: brg });
+    }
+  }
+  // A straight side can span the ring's start vertex: merge last run into
+  // the first when still collinear.
+  if (runs.length > 1 && angDelta(runs[runs.length - 1].brg, runs[0].brg0) < 12) {
+    runs[0].d += runs.pop().d;
+  }
+  const sides = runs.map((r) => r.d).filter((d) => d > 3);
+  const perimeter = sides.reduce((a, b) => a + b, 0);
+  return { sides, perimeter };
+};
+
+// TX general school homestead exemption (2025): $140,000. Additional
+// exemption assumptions are user-toggleable on the card.
+const SCHOOL_HS_EXEMPTION = 140000;
+const OVER65_SCHOOL_EXEMPTION = 10000;
+
+const measureGeojson = (pts) => ({
+  type: "FeatureCollection",
+  features: [
+    ...(pts.length >= 2
+      ? [{ type: "Feature", geometry: { type: "LineString", coordinates: pts }, properties: { kind: "line" } }]
+      : []),
+    ...(pts.length >= 3
+      ? [{ type: "Feature", geometry: { type: "Polygon", coordinates: [[...pts, pts[0]]] }, properties: { kind: "fill" } }]
+      : []),
+    ...pts.map((p) => ({ type: "Feature", geometry: { type: "Point", coordinates: p }, properties: { kind: "pt" } })),
+  ],
+});
+
+const buyerEstimate = (price, rate, isdRate, ex = {}) => {
   if (!price || price <= 0) return null;
-  const nonSchool = (price * (rate - isdRate)) / 100;
-  const school = (Math.max(price - SCHOOL_HS_EXEMPTION, 0) * isdRate) / 100;
+  if (ex.vet100) return 0;
+  let schoolTaxable = price;
+  if (ex.homestead) schoolTaxable -= SCHOOL_HS_EXEMPTION;
+  if (ex.over65) schoolTaxable -= OVER65_SCHOOL_EXEMPTION;
+  // Local-option homestead: up to 20% off taxable value for county/city
+  // entities that adopted it (varies by entity — modeled as a flat 20%).
+  const nonSchoolTaxable = ex.homestead && ex.localOpt ? price * 0.8 : price;
+  const nonSchool = (nonSchoolTaxable * (rate - isdRate)) / 100;
+  const school = (Math.max(schoolTaxable, 0) * isdRate) / 100;
   return nonSchool + school;
 };
 
@@ -73,6 +178,51 @@ const initialView = () => {
 export default function App() {
   const mapDiv = useRef(null);
   const [status, setStatus] = useState("loading map…");
+  const [basemap, setBasemap] = useState("map");
+  const [flood, setFlood] = useState(false);
+  const [measuring, setMeasuring] = useState(false);
+  const [measureText, setMeasureText] = useState(null);
+  const mapRef = useRef(null);
+  const measureRef = useRef({ on: false, pts: [] });
+
+  // Basemap + flood visibility follow React state once layers exist.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer("basemap-sat")) return;
+    map.setLayoutProperty("basemap-sat", "visibility", basemap === "sat" ? "visible" : "none");
+    map.setLayoutProperty("basemap-topo", "visibility", basemap === "topo" ? "visible" : "none");
+    // Over imagery, thin the fills so the photo reads through (boundaries +
+    // rate tint); darken parcel lines for contrast against the photo.
+    const fillOp = basemap === "sat" ? 0.22 : 0.7;
+    const aggOp = basemap === "sat" ? 0.35 : 0.6;
+    for (const [suffix] of PARCEL_SOURCES) {
+      if (map.getLayer(`parcel-fill${suffix}`))
+        map.setPaintProperty(`parcel-fill${suffix}`, "fill-opacity", fillOp);
+      if (map.getLayer(`parcel-line${suffix}`))
+        map.setPaintProperty(`parcel-line${suffix}`, "line-color", basemap === "sat" ? "#f5f2e8" : "#4a4943");
+    }
+    for (const id of ["county-fill", "isd-fill"]) {
+      if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", aggOp);
+    }
+  }, [basemap]);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer("flood-overlay")) return;
+    map.setLayoutProperty("flood-overlay", "visibility", flood ? "visible" : "none");
+  }, [flood]);
+
+  const toggleMeasure = () => {
+    const map = mapRef.current;
+    const m = measureRef.current;
+    m.on = !m.on;
+    m.pts = [];
+    if (map) {
+      map.getSource("measure")?.setData(measureGeojson(m.pts));
+      map.getCanvas().style.cursor = m.on ? "crosshair" : "";
+    }
+    setMeasureText(null);
+    setMeasuring(m.on);
+  };
 
   useEffect(() => {
     const protocol = new Protocol();
@@ -95,6 +245,7 @@ export default function App() {
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     window.__map = map;
+    mapRef.current = map;
 
     map.on("load", () => {
       for (const [suffix, archive] of PARCEL_SOURCES) {
@@ -107,6 +258,20 @@ export default function App() {
       // Insert beneath the basemap's first symbol layer so street/city labels
       // stay readable above the choropleth.
       const firstSymbol = map.getStyle().layers.find((l) => l.type === "symbol")?.id;
+
+      // Alternate basemaps (raster, hidden until picked) sit under all data
+      // layers; positron's labels stay on top for a hybrid look.
+      map.addSource("usgs-imagery", { type: "raster", tiles: [USGS_IMAGERY], tileSize: 256, maxzoom: 16 });
+      map.addSource("usgs-topo", { type: "raster", tiles: [USGS_TOPO], tileSize: 256, maxzoom: 15 });
+      map.addSource("fema-nfhl", { type: "raster", tiles: [FEMA_NFHL], tileSize: 256, minzoom: 9 });
+      map.addLayer(
+        { id: "basemap-sat", type: "raster", source: "usgs-imagery", layout: { visibility: "none" } },
+        firstSymbol
+      );
+      map.addLayer(
+        { id: "basemap-topo", type: "raster", source: "usgs-topo", layout: { visibility: "none" } },
+        firstSymbol
+      );
 
       map.addLayer(
         {
@@ -198,15 +363,101 @@ export default function App() {
           },
           firstSymbol
         );
+        // Red boundary trace on hover (feature-state driven).
+        map.addLayer(
+          {
+            id: `parcel-hover${suffix}`,
+            type: "line",
+            source: src,
+            "source-layer": "parcels",
+            minzoom: 13,
+            paint: {
+              "line-color": "#e0201d",
+              "line-width": 2.5,
+              "line-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 1, 0],
+            },
+          },
+          firstSymbol
+        );
       }
+
+      // Flood overlay above parcel fills (visible at parcel zooms), below labels.
+      map.addLayer(
+        {
+          id: "flood-overlay",
+          type: "raster",
+          source: "fema-nfhl",
+          layout: { visibility: "none" },
+          paint: { "raster-opacity": 0.55 },
+        },
+        firstSymbol
+      );
+
+      // Measure tool overlay.
+      map.addSource("measure", { type: "geojson", data: measureGeojson([]) });
+      map.addLayer({
+        id: "measure-fill", type: "fill", source: "measure",
+        filter: ["==", ["get", "kind"], "fill"],
+        paint: { "fill-color": "#184f95", "fill-opacity": 0.14 },
+      });
+      map.addLayer({
+        id: "measure-line", type: "line", source: "measure",
+        filter: ["==", ["get", "kind"], "line"],
+        paint: { "line-color": "#184f95", "line-width": 2.5, "line-dasharray": [1.6, 1.2] },
+      });
+      map.addLayer({
+        id: "measure-pts", type: "circle", source: "measure",
+        filter: ["==", ["get", "kind"], "pt"],
+        paint: { "circle-radius": 4.5, "circle-color": "#184f95", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 },
+      });
+
+      let hovered = null;
+      const clearHover = () => {
+        if (hovered) {
+          map.setFeatureState(hovered, { hover: false });
+          hovered = null;
+        }
+      };
+      const onParcelHover = (e) => {
+        if (measureRef.current.on) return;
+        const f = e.features[0];
+        if (hovered && hovered.source === f.source && hovered.id === f.id) return;
+        clearHover();
+        hovered = { source: f.source, sourceLayer: "parcels", id: f.id };
+        map.setFeatureState(hovered, { hover: true });
+      };
+
+      const onMeasureClick = (e) => {
+        const m = measureRef.current;
+        if (!m.on) return;
+        m.pts = [...m.pts, [e.lngLat.lng, e.lngLat.lat]];
+        map.getSource("measure").setData(measureGeojson(m.pts));
+        let text = null;
+        if (m.pts.length >= 2) {
+          let d = 0;
+          for (let i = 1; i < m.pts.length; i++) d += distFt(m.pts[i - 1], m.pts[i]);
+          text = `Distance: ${fmtDist(d)}`;
+          if (m.pts.length >= 3) text += ` · Area: ${fmtArea(areaSqFt(m.pts))}`;
+        }
+        setMeasureText(text || "Click to add points");
+      };
+      map.on("click", onMeasureClick);
       const setSelection = (filter) => {
         for (const [suffix] of PARCEL_SOURCES) map.setFilter(`parcel-selected${suffix}`, filter);
       };
 
       const onParcelClick = (e) => {
+        if (measureRef.current.on) return;
         const p = e.features[0].properties;
         const est = p.mkt > 0 ? (p.mkt * p.rate) / 100 : null;
         const defaultPrice = p.mkt > 0 ? p.mkt : 300000;
+        const dims = lotDimensions(e.features[0].geometry);
+        const dimsRow = dims && dims.sides.length >= 3 && dims.sides.length <= 8
+          ? `<tr><td>Lot dimensions</td><td>${dims.sides.map((s) => Math.round(s)).join(" × ")} ft</td></tr>
+             <tr><td>Perimeter</td><td>≈ ${fmtDist(dims.perimeter)}</td></tr>`
+          : dims
+            ? `<tr><td>Perimeter</td><td>≈ ${fmtDist(dims.perimeter)} (${dims.sides.length} sides)</td></tr>`
+            : "";
         const popup = new maplibregl.Popup({ maxWidth: "340px" })
           .setLngLat(e.lngLat)
           .setHTML(
@@ -216,6 +467,7 @@ export default function App() {
               <table>
                 <tr><td>Owner</td><td>${p.own || "—"}</td></tr>
                 <tr><td>Lot size</td><td>${fmtAcres(p.ac)}</td></tr>
+                ${dimsRow}
                 <tr><td>Market value</td><td>${fmtUSD(p.mkt)}</td></tr>
                 <tr><td>Est. annual tax</td><td>${est ? fmtUSD(est) : "—"}</td></tr>
                 <tr><td>School district</td><td>${p.isd || "—"}</td></tr>
@@ -226,8 +478,14 @@ export default function App() {
               <div class="buyer">
                 <div class="buyer-title">Buyer estimate</div>
                 <label>If purchased at $<input type="text" inputmode="numeric" class="buyer-price" value="${defaultPrice.toLocaleString("en-US")}"></label>
+                <div class="buyer-ex">
+                  <label><input type="checkbox" class="ex-homestead" checked> Homestead ($140k school)</label>
+                  <label><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$10k school)</label>
+                  <label><input type="checkbox" class="ex-localopt"> Local-option 20% (county/city)</label>
+                  <label><input type="checkbox" class="ex-vet"> 100% disabled veteran</label>
+                </div>
                 <div class="buyer-result"></div>
-                <div class="card-note">Assumes general homestead ($140k school exemption); optional county/city exemptions vary</div>
+                <div class="card-note">Exemption amounts are statewide defaults; local adoption varies by entity</div>
               </div>
               <div class="card-note">v0: county-wide + city + ISD units; special districts pending roll data</div>
             </div>`
@@ -236,12 +494,20 @@ export default function App() {
         const el = popup.getElement();
         const input = el.querySelector(".buyer-price");
         const result = el.querySelector(".buyer-result");
+        const exBoxes = {
+          homestead: el.querySelector(".ex-homestead"),
+          over65: el.querySelector(".ex-over65"),
+          localOpt: el.querySelector(".ex-localopt"),
+          vet100: el.querySelector(".ex-vet"),
+        };
         const update = () => {
           const price = Number(input.value.replace(/[^0-9]/g, ""));
-          const b = buyerEstimate(price, Number(p.rate), Number(p.isdr ?? 0));
+          const ex = Object.fromEntries(Object.entries(exBoxes).map(([k, box]) => [k, box.checked]));
+          const b = buyerEstimate(price, Number(p.rate), Number(p.isdr ?? 0), ex);
           result.textContent = b != null ? `≈ ${fmtUSD(b)} / year (${fmtUSD(b / 12)}/mo)` : "—";
         };
         input.addEventListener("input", update);
+        for (const box of Object.values(exBoxes)) box.addEventListener("change", update);
         update();
         // Prop_ID '0' means the CAD shared no id (much of Travis): an id-based
         // outline would light up every such parcel in the county, so skip it.
@@ -275,8 +541,16 @@ export default function App() {
       });
       map.on("click", "county-fill", aggregateCard(" County"));
       for (const id of [...PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`), "isd-fill", "county-fill"]) {
-        map.on("mouseenter", id, () => (map.getCanvas().style.cursor = "pointer"));
-        map.on("mouseleave", id, () => (map.getCanvas().style.cursor = ""));
+        map.on("mouseenter", id, () => {
+          if (!measureRef.current.on) map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", id, () => {
+          if (!measureRef.current.on) map.getCanvas().style.cursor = "";
+        });
+      }
+      for (const [suffix] of PARCEL_SOURCES) {
+        map.on("mousemove", `parcel-fill${suffix}`, onParcelHover);
+        map.on("mouseleave", `parcel-fill${suffix}`, clearHover);
       }
       setStatus(null);
     });
@@ -296,6 +570,23 @@ export default function App() {
         <h1>South-Central Texas Property Tax Map</h1>
         <span className="badge">v0 · 63 counties (SA + Austin + coast) · 2025 · jurisdictions approximate</span>
       </header>
+      <div className="layers-panel">
+        <div className="layers-title">Layers</div>
+        {[["map", "Map"], ["sat", "Satellite"], ["topo", "Topo"]].map(([v, label]) => (
+          <label key={v}>
+            <input type="radio" name="basemap" checked={basemap === v} onChange={() => setBasemap(v)} />
+            {label}
+          </label>
+        ))}
+        <label className="layers-sep">
+          <input type="checkbox" checked={flood} onChange={(e) => setFlood(e.target.checked)} />
+          FEMA flood zones
+        </label>
+        <button className={`measure-btn${measuring ? " on" : ""}`} onClick={toggleMeasure}>
+          {measuring ? "✕ Stop measuring" : "📏 Measure"}
+        </button>
+        {measuring && <div className="measure-readout">{measureText || "Click map to add points"}</div>}
+      </div>
       <div className="legend">
         <div className="legend-title">Nominal tax rate (% of value)</div>
         <div
