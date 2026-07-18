@@ -89,7 +89,14 @@ over=0; total=0
 for f in "$WEB_TILES"/*.pmtiles; do
   bytes=$(stat -f%z "$f"); total=$((total + bytes))
   printf "  %-28s %5.1f MB\n" "$(basename "$f")" "$(echo "$bytes / 1048576" | bc -l)"
-  if [ "$bytes" -ge 99614720 ]; then echo "  ^^ OVER 95MB SAFETY MARGIN"; over=1; fi
+  # GitHub hard-rejects >=100MB. Fail at 99MB; warn from 93MB up.
+  # (metro-rest runs hot because it carries the statewide county+ISD overview
+  # layers — split those into their own archive at the next annual refresh.)
+  if [ "$bytes" -ge 103809024 ]; then
+    echo "  ^^ FAIL: within 1MB of GitHub's 100MB limit"; over=1
+  elif [ "$bytes" -ge 97517568 ]; then
+    echo "  ^^ warning: close to GitHub's 100MB limit"
+  fi
 done
 printf "  TOTAL: %.2f GB across %d archives\n" "$(echo "$total / 1073741824" | bc -l)" "${#ARCHIVES[@]}"
 [ "$over" = 0 ] && echo "== done ==" || { echo "== FAIL: archive too big =="; exit 1; }

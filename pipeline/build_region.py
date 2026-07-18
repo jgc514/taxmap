@@ -430,7 +430,8 @@ def _load_statewide():
     entries = []
     for cname, r in STATEWIDE_COUNTIES.items():
         hits = _glob.glob(str(RAW / f"stratmap_{r['fips']}/**/*.dbf"), recursive=True)
-        n = _struct.unpack("<I", Path(hits[0]).read_bytes()[4:8])[0] if hits else 0
+        # sum every part: multi-part counties (Harris) ship several dbfs
+        n = sum(_struct.unpack("<I", Path(h).read_bytes()[4:8])[0] for h in hits)
         entries.append((cname, r, n))
 
     import duckdb as _duckdb
@@ -538,11 +539,14 @@ def resolve_ring5_codes(county_names):
     return codes
 
 
-def parcels_shp(fips: str) -> str:
-    hits = glob.glob(str(RAW / f"stratmap_*/**/*{fips}*.shp"), recursive=True)
+def parcels_shps(fips: str) -> list:
+    """ALL shapefiles for a county — huge counties ship multi-part (Harris
+    is harris_east + harris_west; loading only the first part silently
+    drops half the county)."""
+    hits = sorted(glob.glob(str(RAW / f"stratmap_*/**/*{fips}*.shp"), recursive=True))
     if not hits:
         raise FileNotFoundError(f"no parcel shapefile for {fips}")
-    return hits[0]
+    return hits
 
 
 def parcels_geom_sql(shp: str) -> str:
@@ -657,23 +661,24 @@ def _load_geodata(con):
         if cfg.get("no_parcels"):
             print(f"{cname}: NO PARCEL DATA (boundary-only county)")
             continue
-        shp = parcels_shp(cfg["fips"])
-        gsql = parcels_geom_sql(shp)
-        print(f"{cname}: {Path(shp).name}" + (" [3857->4326]" if "Transform" in gsql else ""))
-        con.execute(
-            f"""INSERT INTO parcels_all
-            SELECT prop_id, addr, mkt, county, base, c.city_name, i.isd_name, p.geom FROM (
-              SELECT Prop_ID AS prop_id, SITUS_ADDR AS addr,
-                     -- some CADs export values as text ("$ 117,596"): strip
-                     -- and TRY_CAST so one bad row can't abort the build
-                     TRY_CAST(regexp_replace(CAST(MKT_VALUE AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE) AS mkt,
-                     '{cname}' AS county, {cfg["base"]} AS base,
-                     {gsql} AS geom, ST_PointOnSurface({gsql}) AS pt
-              FROM ST_Read('{shp}') WHERE geom IS NOT NULL
-            ) p
-            LEFT JOIN places c ON ST_Within(p.pt, c.geom)
-            LEFT JOIN isds i ON ST_Within(p.pt, i.geom)"""
-        )
+        # multi-part counties (Harris = east + west): load every shapefile
+        for shp in parcels_shps(cfg["fips"]):
+            gsql = parcels_geom_sql(shp)
+            print(f"{cname}: {Path(shp).name}" + (" [3857->4326]" if "Transform" in gsql else ""))
+            con.execute(
+                f"""INSERT INTO parcels_all
+                SELECT prop_id, addr, mkt, county, base, c.city_name, i.isd_name, p.geom FROM (
+                  SELECT Prop_ID AS prop_id, SITUS_ADDR AS addr,
+                         -- some CADs export values as text ("$ 117,596"): strip
+                         -- and TRY_CAST so one bad row can't abort the build
+                         TRY_CAST(regexp_replace(CAST(MKT_VALUE AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE) AS mkt,
+                         '{cname}' AS county, {cfg["base"]} AS base,
+                         {gsql} AS geom, ST_PointOnSurface({gsql}) AS pt
+                  FROM ST_Read('{shp}') WHERE geom IS NOT NULL
+                ) p
+                LEFT JOIN places c ON ST_Within(p.pt, c.geom)
+                LEFT JOIN isds i ON ST_Within(p.pt, i.geom)"""
+            )
     # Dedup stacked/duplicated rows sharing a real prop_id. Some CADs (Travis)
     # export Prop_ID='0' for a large share of parcels — those are distinct
     # properties, never collapse them.
@@ -698,13 +703,14 @@ def _load_side_attrs(con):
     for cname, cfg in COUNTIES.items():
         if cfg.get("no_parcels"):
             continue
-        shp = parcels_shp(cfg["fips"])
-        con.execute(
-            f"""INSERT INTO parcel_attrs
-            SELECT '{cname}', Prop_ID, any_value(OWNER_NAME),
-                   any_value(TRY_CAST(regexp_replace(CAST(GIS_AREA AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE))
-            FROM ST_Read('{shp}') GROUP BY Prop_ID"""
-        )
+        for shp in parcels_shps(cfg["fips"]):
+            con.execute(
+                f"""INSERT INTO parcel_attrs
+                SELECT '{cname}', Prop_ID, any_value(OWNER_NAME),
+                       any_value(TRY_CAST(regexp_replace(CAST(GIS_AREA AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE))
+                FROM ST_Read('{shp}') WHERE Prop_ID NOT IN (SELECT prop_id FROM parcel_attrs WHERE county = '{cname}')
+                GROUP BY Prop_ID"""
+            )
     print("parcel_attrs:", con.execute("SELECT count(*) FROM parcel_attrs").fetchone()[0])
 
 
