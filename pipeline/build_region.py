@@ -704,11 +704,18 @@ def _load_side_attrs(con):
         if cfg.get("no_parcels"):
             continue
         for shp in parcels_shps(cfg["fips"]):
+            # CAST: some counties store Prop_ID as BIGINT; anti-join keeps a
+            # multi-part county's boundary-straddling ids from duplicating
+            # (NULL-safe: null ids carry no joinable attrs, drop them here)
             con.execute(
                 f"""INSERT INTO parcel_attrs
-                SELECT '{cname}', Prop_ID, any_value(OWNER_NAME),
+                SELECT '{cname}', CAST(Prop_ID AS VARCHAR), any_value(OWNER_NAME),
                        any_value(TRY_CAST(regexp_replace(CAST(GIS_AREA AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE))
-                FROM ST_Read('{shp}') WHERE Prop_ID NOT IN (SELECT prop_id FROM parcel_attrs WHERE county = '{cname}')
+                FROM ST_Read('{shp}')
+                WHERE Prop_ID IS NOT NULL
+                  AND CAST(Prop_ID AS VARCHAR) NOT IN (
+                    SELECT prop_id FROM parcel_attrs
+                    WHERE county = '{cname}' AND prop_id IS NOT NULL)
                 GROUP BY Prop_ID"""
             )
     print("parcel_attrs:", con.execute("SELECT count(*) FROM parcel_attrs").fetchone()[0])
