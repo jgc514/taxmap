@@ -125,10 +125,10 @@ const lotDimensions = (geometry) => {
   return { sides, perimeter };
 };
 
-// TX general school homestead exemption (2025): $140,000. Additional
-// exemption assumptions are user-toggleable on the card.
+// TX school homestead exemptions (2025, post-SB4/SB23): $140,000 general +
+// $60,000 additional for over-65/disabled. Toggleable on the card.
 const SCHOOL_HS_EXEMPTION = 140000;
-const OVER65_SCHOOL_EXEMPTION = 10000;
+const OVER65_SCHOOL_EXEMPTION = 60000;
 
 const measureGeojson = (pts) => ({
   type: "FeatureCollection",
@@ -471,7 +471,7 @@ export default function App() {
                 <label>If purchased at $<input type="text" inputmode="numeric" class="buyer-price" value="${defaultPrice.toLocaleString("en-US")}"></label>
                 <div class="buyer-ex">
                   <label><input type="checkbox" class="ex-homestead" checked> Homestead ($140k school)</label>
-                  <label><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$10k school)</label>
+                  <label><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$60k school)</label>
                   <label><input type="checkbox" class="ex-localopt"> Local-option 20% (county/city)</label>
                   <label><input type="checkbox" class="ex-vet"> 100% disabled veteran</label>
                 </div>

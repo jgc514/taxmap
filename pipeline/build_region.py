@@ -474,14 +474,25 @@ def norm_city(name: str) -> str:
     return re.sub(r"\s+", " ", n)
 
 
+# TIGER vs PTAD school-name variants seen statewide (spelling drift).
+ISD_ALIASES = {
+    "culbersoncountyallamooreisd": "culbersoncountyallamoreisd",
+    "lapoynerisd": "lapoynorisd",
+}
+
+
 def norm_isd(name: str) -> str:
     n = name.strip().lower()
     n = n.replace("independent school district", "isd")
+    n = n.replace("municipal school district", "msd")   # Stafford MSD
     n = n.replace("consolidated common school district", "ccsd")
     n = n.replace("common school district", "csd")
     n = n.replace("consolidated isd", "cisd")
     n = n.replace(" county isd", " isd")  # PTAD "Schleicher County ISD" vs TIGER "Schleicher ISD"
-    return re.sub(r"\s+", " ", n)
+    n = n.replace(" collegiate ", " ")    # TIGER P-TECH rebrands (Floydada Collegiate ISD)
+    n = re.sub(r"\bcisd\b", "isd", n)     # PTAD "Clyde ISD" vs TIGER "Clyde Consolidated ISD"
+    key = re.sub(r"\s+", "", n)           # space-insensitive (LaPoyner / La Poynor)
+    return ISD_ALIASES.get(key, key)
 
 
 def norm_county(name: str) -> str:
