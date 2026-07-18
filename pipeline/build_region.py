@@ -652,7 +652,10 @@ def _load_geodata(con):
         con.execute(
             f"""INSERT INTO parcels_all
             SELECT prop_id, addr, mkt, county, base, c.city_name, i.isd_name, p.geom FROM (
-              SELECT Prop_ID AS prop_id, SITUS_ADDR AS addr, MKT_VALUE AS mkt,
+              SELECT Prop_ID AS prop_id, SITUS_ADDR AS addr,
+                     -- some CADs export values as text ("$ 117,596"): strip
+                     -- and TRY_CAST so one bad row can't abort the build
+                     TRY_CAST(regexp_replace(CAST(MKT_VALUE AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE) AS mkt,
                      '{cname}' AS county, {cfg["base"]} AS base,
                      {gsql} AS geom, ST_PointOnSurface({gsql}) AS pt
               FROM ST_Read('{shp}') WHERE geom IS NOT NULL
@@ -687,7 +690,8 @@ def _load_side_attrs(con):
         shp = parcels_shp(cfg["fips"])
         con.execute(
             f"""INSERT INTO parcel_attrs
-            SELECT '{cname}', Prop_ID, any_value(OWNER_NAME), any_value(GIS_AREA)
+            SELECT '{cname}', Prop_ID, any_value(OWNER_NAME),
+                   any_value(TRY_CAST(regexp_replace(CAST(GIS_AREA AS VARCHAR), '[^0-9.]', '', 'g') AS DOUBLE))
             FROM ST_Read('{shp}') GROUP BY Prop_ID"""
         )
     print("parcel_attrs:", con.execute("SELECT count(*) FROM parcel_attrs").fetchone()[0])
