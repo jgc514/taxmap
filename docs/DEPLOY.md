@@ -70,9 +70,13 @@ requests with 200-full-file while its cache is cold, which breaks PMTiles
 ("Check that your storage backend supports HTTP Byte Serving"). One full GET
 of each archive fixes it:
 ```bash
-for a in metro-rest-2025 bexar-parcels-2025 travis-a-2025 travis-b-2025 \
-         central-north-2025 central-south-2025 west-2025 south-2025 coastal-2025; do
+# warm every archive listed in web/src/archives.json — browser variants too
+# (GitHub's CDN caches per Accept-Encoding, so warm the gzip variant browsers
+# actually request):
+for a in $(python3 -c "import json;print(' '.join(json.load(open('web/src/archives.json'))))"); do
   curl -so /dev/null "https://jgc514.github.io/taxmap/tiles/$a.pmtiles"
+  curl -so /dev/null -H "Accept-Encoding: gzip, deflate, br, zstd" \
+    "https://jgc514.github.io/taxmap/tiles/$a.pmtiles"
 done
 ```
 (The Cloudflare R2 path above remains the long-term home — no cold-cache issue,
