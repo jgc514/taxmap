@@ -30,6 +30,43 @@ const fmtAcres = (ac) => {
 
 const NO_SELECTION = ["==", ["get", "id"], "__none__"];
 
+// City-name normalization matching the pipeline's norm_city (build_region.py),
+// so a parcel's TIGER city name keys into rate-breakdown.json's city rates.
+const normCity = (name) =>
+  (name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^(city|town|village) of /, "")
+    .replace(/-/g, " ")
+    .replace(/\s+/g, " ");
+
+// Itemized jurisdiction breakdown from the tile props + rate-breakdown.json.
+// Returns rows [{label, rate}] whose rates sum to the parcel's total, or null
+// if the county isn't in the breakdown table.
+const jurisdictionRows = (p) => {
+  const b = RATE_BREAKDOWN[p.cty];
+  if (!b) return null;
+  const rows = b.base_units.map((u) => ({ label: u.name, rate: u.rate }));
+  if (p.cj) {
+    const city = b.cities[normCity(p.cj)];
+    if (city && city.rate > 0) rows.push({ label: `City of ${city.name}`, rate: city.rate });
+  }
+  const isdr = Number(p.isdr ?? 0);
+  if (isdr > 0 && p.isd) rows.push({ label: p.isd, rate: isdr });
+  const sum = rows.reduce((a, r) => a + r.rate, 0);
+  // Flag if components don't reconstruct the tile total (partial data): the
+  // difference is unattributed special districts not yet itemized.
+  const gap = Number(p.rate) - sum;
+  return { rows, gap: Math.abs(gap) >= 0.005 ? gap : 0 };
+};
+
+const cadHref = (p) => {
+  const c = CAD_LINKS[p.cty];
+  if (!c) return null;
+  const url = c.q && p.id && p.id !== "0" ? c.q.replace("{id}", encodeURIComponent(p.id)) : c.url;
+  return { url, name: c.name };
+};
+
 // Tiles served from <base>/tiles by default; set VITE_TILES_URL to an external
 // host (e.g. R2 custom domain) to serve them elsewhere.
 const TILES_BASE =
@@ -41,6 +78,8 @@ const TILES_BASE =
 // layer ids; "" is the metro-rest archive.
 // Entries are either a bare archive name (served from TILES_BASE) or
 // {name, url} for archives hosted elsewhere (overflow tile repos / R2).
+import RATE_BREAKDOWN from "./rate-breakdown.json";
+import CAD_LINKS from "./cad-links.json";
 import ARCHIVES from "./archives.json";
 const PARCEL_SOURCES = ARCHIVES.map((entry, i) => [
   i === 0 ? "" : `-${i}`,
@@ -208,6 +247,102 @@ export default function App() {
     map.setLayoutProperty("flood-overlay", "visibility", flood ? "visible" : "none");
   }, [flood]);
 
+  const [query, setQuery] = useState("");
+  const [suggests, setSuggests] = useState([]);
+  const [searchMode, setSearchMode] = useState("address"); // address | owner | id
+  const searchAbort = useRef(null);
+  const searchTimer = useRef(null);
+
+  // Photon geocoder (free, autocomplete-friendly), biased to Texas' center
+  // and clipped to the TX bounding box so suggestions stay in-state.
+  const geocodeAddress = (q) => {
+    searchAbort.current?.abort();
+    const ctrl = new AbortController();
+    searchAbort.current = ctrl;
+    const url =
+      "https://photon.komoot.io/api/?limit=6&lat=31.3&lon=-99.3&bbox=-106.9,25.6,-93.4,36.6&q=" +
+      encodeURIComponent(q);
+    fetch(url, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        const items = (d.features || [])
+          .filter((f) => f.properties.state === "Texas" || !f.properties.state)
+          .map((f) => {
+            const pr = f.properties;
+            const line = [
+              [pr.housenumber, pr.street].filter(Boolean).join(" ") || pr.name,
+              pr.city,
+              pr.state,
+            ]
+              .filter(Boolean)
+              .join(", ");
+            return { label: line, center: f.geometry.coordinates };
+          });
+        setSuggests(items);
+      })
+      .catch(() => {});
+  };
+
+  // Owner / Property-ID lookup over parcels currently loaded in the view
+  // (needs parcel zoom). Statewide owner index is a documented next step.
+  const searchLoadedParcels = (q, mode) => {
+    const map = mapRef.current;
+    if (!map || map.getZoom() < 12.5) {
+      setSuggests([{ label: "Zoom in to a neighborhood to search owners / IDs", disabled: true }]);
+      return;
+    }
+    const layers = PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`).filter((l) => map.getLayer(l));
+    const feats = map.queryRenderedFeatures({ layers });
+    const needle = q.toLowerCase();
+    const seen = new Set();
+    const items = [];
+    for (const f of feats) {
+      const p = f.properties;
+      const hay = mode === "id" ? String(p.id || "") : String(p.own || "").toLowerCase();
+      if (hay && (mode === "id" ? hay === q : hay.includes(needle))) {
+        const key = `${p.cty}:${p.id}:${p.addr}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({
+          label: `${p.own || "—"} · ${p.addr || p.id}`,
+          center: f.geometry.type === "Point" ? f.geometry.coordinates : undefined,
+          feature: f,
+        });
+        if (items.length >= 8) break;
+      }
+    }
+    setSuggests(items.length ? items : [{ label: "No matches in view", disabled: true }]);
+  };
+
+  const onSearchInput = (v) => {
+    setQuery(v);
+    clearTimeout(searchTimer.current);
+    if (v.trim().length < 3) {
+      setSuggests([]);
+      return;
+    }
+    searchTimer.current = setTimeout(() => {
+      if (searchMode === "address") geocodeAddress(v.trim());
+      else searchLoadedParcels(v.trim(), searchMode);
+    }, 250);
+  };
+
+  const pickSuggest = (s) => {
+    if (s.disabled) return;
+    const map = mapRef.current;
+    if (s.feature) {
+      const c =
+        s.feature.geometry.type === "Point"
+          ? s.feature.geometry.coordinates
+          : s.center;
+      if (c) map.flyTo({ center: c, zoom: Math.max(map.getZoom(), 16.5) });
+    } else if (s.center) {
+      map.flyTo({ center: s.center, zoom: 17 });
+    }
+    setQuery(s.label);
+    setSuggests([]);
+  };
+
   const toggleMeasure = () => {
     const map = mapRef.current;
     const m = measureRef.current;
@@ -241,6 +376,16 @@ export default function App() {
       history.replaceState(null, "", `?${p}`);
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
+    // Live user location (browser prompts for permission on first use;
+    // denial just leaves the control inactive — no crash).
+    map.addControl(
+      new maplibregl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true },
+        trackUserLocation: true,
+        showUserLocation: true,
+      }),
+      "top-right"
+    );
     window.__map = map;
     mapRef.current = map;
 
@@ -455,6 +600,23 @@ export default function App() {
           : dims
             ? `<tr><td>Perimeter</td><td>≈ ${fmtDist(dims.perimeter)} (${dims.sides.length} sides)</td></tr>`
             : "";
+        const jur = jurisdictionRows(p);
+        const jurHtml = jur
+          ? `<details class="breakdown"><summary>Jurisdiction breakdown</summary>
+               <table class="breakdown-table">
+                 ${jur.rows
+                   .map((r) => `<tr><td>${r.label}</td><td>${r.rate.toFixed(4)}%</td></tr>`)
+                   .join("")}
+                 ${jur.gap
+                   ? `<tr class="gap"><td>Other special districts</td><td>${jur.gap.toFixed(4)}%</td></tr>`
+                   : ""}
+                 <tr class="total"><td>Total</td><td>${Number(p.rate).toFixed(4)}%</td></tr>
+               </table></details>`
+          : "";
+        const cad = cadHref(p);
+        const cadHtml = cad
+          ? `<a class="cad-link" href="${cad.url}" target="_blank" rel="noopener">View on ${cad.name} ↗</a>`
+          : "";
         const popup = new maplibregl.Popup({ maxWidth: "340px" })
           .setLngLat(e.lngLat)
           .setHTML(
@@ -484,6 +646,8 @@ export default function App() {
                 <div class="buyer-result"></div>
                 <div class="card-note">Exemption amounts are statewide defaults; local adoption varies by entity</div>
               </div>
+              ${jurHtml}
+              ${cadHtml}
               <div class="card-note">v0: county-wide + city + ISD units; special districts pending roll data</div>
             </div>`
           )
@@ -566,6 +730,48 @@ export default function App() {
       <header className="topbar">
         <h1>Texas Property Tax Map</h1>
         <span className="badge">v0 · statewide — all 254 counties · 2025 · jurisdictions approximate</span>
+        <div className="search">
+          <div className="search-modes">
+            {[["address", "Address"], ["owner", "Owner"], ["id", "Property ID"]].map(([m, label]) => (
+              <button
+                key={m}
+                className={searchMode === m ? "on" : ""}
+                onClick={() => {
+                  setSearchMode(m);
+                  setQuery("");
+                  setSuggests([]);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <input
+            className="search-input"
+            value={query}
+            placeholder={
+              searchMode === "address"
+                ? "Search an address…"
+                : searchMode === "owner"
+                  ? "Owner name (in current view)…"
+                  : "Exact property ID (in current view)…"
+            }
+            onChange={(e) => onSearchInput(e.target.value)}
+          />
+          {suggests.length > 0 && (
+            <ul className="search-results">
+              {suggests.map((s, i) => (
+                <li
+                  key={i}
+                  className={s.disabled ? "disabled" : ""}
+                  onClick={() => pickSuggest(s)}
+                >
+                  {s.label}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </header>
       <div className="layers-panel">
         <div className="layers-title">Layers</div>
