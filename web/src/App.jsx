@@ -564,8 +564,8 @@ export default function App() {
     <div className="app">
       <div ref={mapDiv} className="map" />
       <header className="topbar">
-        <h1>South-Central Texas Property Tax Map</h1>
-        <span className="badge">v0 · 63 counties (SA + Austin + coast) · 2025 · jurisdictions approximate</span>
+        <h1>Texas Property Tax Map</h1>
+        <span className="badge">v0 · statewide — all 254 counties · 2025 · jurisdictions approximate</span>
       </header>
       <div className="layers-panel">
         <div className="layers-title">Layers</div>
