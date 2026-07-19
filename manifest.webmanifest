@@ -1,0 +1,21 @@
+{
+  "name": "Texas Property Tax Map",
+  "short_name": "TaxMap",
+  "description": "Interactive property-tax heat map for all 254 Texas counties \u2014 drill from county to individual parcel.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#fcfcfb",
+  "theme_color": "#184f95",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
