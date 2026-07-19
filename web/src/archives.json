@@ -15,21 +15,72 @@
   "tx04-2025",
   "tx05-2025",
   "tx06-2025",
-  "tx07-2025",
-  "tx08-2025",
-  "tx09-2025",
-  "tx10-a-2025",
-  "tx10-b-2025",
-  "tx11-2025",
-  "tx12-2025",
-  "tx13-2025",
-  "tx14-2025",
-  "tx15-2025",
-  "tx16-a-2025",
-  "tx16-b-2025",
-  "tx17-2025",
-  "tx18-2025",
-  "tx19-2025",
-  "tx20-2025",
-  "west-2025"
+  {
+    "name": "tx07-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx07-2025.pmtiles"
+  },
+  {
+    "name": "tx08-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx08-2025.pmtiles"
+  },
+  {
+    "name": "tx09-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx09-2025.pmtiles"
+  },
+  {
+    "name": "tx10-a-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx10-a-2025.pmtiles"
+  },
+  {
+    "name": "tx10-b-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx10-b-2025.pmtiles"
+  },
+  {
+    "name": "tx11-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx11-2025.pmtiles"
+  },
+  {
+    "name": "tx12-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx12-2025.pmtiles"
+  },
+  {
+    "name": "tx13-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx13-2025.pmtiles"
+  },
+  {
+    "name": "tx14-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx14-2025.pmtiles"
+  },
+  {
+    "name": "tx15-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx15-2025.pmtiles"
+  },
+  {
+    "name": "tx16-a-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx16-a-2025.pmtiles"
+  },
+  {
+    "name": "tx16-b-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx16-b-2025.pmtiles"
+  },
+  {
+    "name": "tx17-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx17-2025.pmtiles"
+  },
+  {
+    "name": "tx18-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx18-2025.pmtiles"
+  },
+  {
+    "name": "tx19-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx19-2025.pmtiles"
+  },
+  {
+    "name": "tx20-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx20-2025.pmtiles"
+  },
+  {
+    "name": "west-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/west-2025.pmtiles"
+  }
 ]

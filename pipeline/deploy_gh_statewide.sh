@@ -20,7 +20,7 @@ SCRATCH="${1:?usage: deploy_gh_statewide.sh <scratch-dir> [--push]}"
 PUSH="${2:-}"
 OWNER="jgc514"
 MAIN_BUDGET=$((900 * 1024 * 1024))
-REPO_BUDGET=$((900 * 1024 * 1024))
+REPO_BUDGET=$((950 * 1024 * 1024))
 PAGES_BASE="https://${OWNER}.github.io"
 
 names=$(python3 -c "
