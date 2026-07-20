@@ -42,6 +42,7 @@ PLACE_SHP = RAW / "tiger_place/tl_2025_48_place.shp"
 UNSD_SHP = RAW / "tiger_unsd/tl_2025_48_unsd.shp"
 COUNTY_ZIP = RAW / "tl_2025_us_county.zip"
 PTAD_XLSX = RAW / "ptad-2025-total-rates-levies.xlsx"
+WATER_DISTRICTS = RAW / "tceq_water_districts.geojson"  # TCEQ MUD/WCID/etc.
 
 # Ring-5 counties: their ISDs/cities can reach into ring-4 counties, so their
 # PTAD codes join the city/ISD rate lookup (resolved by name at runtime).
@@ -500,6 +501,24 @@ def norm_county(name: str) -> str:
     return re.sub(r"[^a-z]", "", name.lower())
 
 
+def norm_wd(name: str) -> str:
+    """Normalize a special-district name so a TCEQ polygon name matches its
+    PTAD taxing-unit name (drops the '… of X County' suffix, expands the
+    common district-type words, strips number punctuation)."""
+    s = (name or "").lower()
+    s = re.sub(r"\bof\b.*$", "", s)  # "Meyer Ranch MUD of Comal County" -> "meyer ranch mud"
+    s = s.replace("municipal utility district", "mud")
+    s = s.replace("water control and improvement district", "wcid")
+    s = s.replace("water control & improvement district", "wcid")
+    s = s.replace("fresh water supply district", "fwsd")
+    s = s.replace("levee improvement district", "lid")
+    s = s.replace("municipal management district", "mmd")
+    s = s.replace("management district", "mmd")
+    s = re.sub(r"\bnumber\b|\bno\b", "", s)
+    s = s.replace("#", "")
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
 def load_taxing_units():
     """Returns (units, county_names) where county_names maps PTAD county
     code -> county name (from the XXX-000-00 unit rows)."""
@@ -585,11 +604,17 @@ def main():
     # listed in the parcel's county, then one in an adjacent county (cities
     # and ISDs straddle county lines), else a sole statewide candidate.
     city_rates, isd_rates = {}, {}
+    # Special-district (MUD/WCID/…) rates keyed by (county code, norm name);
+    # everything that isn't the county unit / ISD / city and levies a rate is
+    # eligible to match a TCEQ water-district polygon.
+    wd_rates = {}
     for _, uid, name, county, utype, rate in units:
         if utype == "03":
             city_rates.setdefault(norm_city(name), []).append((name, uid, rate, county))
         elif utype == "02":
             isd_rates.setdefault(norm_isd(name), []).append((name, uid, rate, county))
+        elif utype not in ("00",) and rate > 0:
+            wd_rates[(county, norm_wd(name))] = (uid, name, rate)
 
     rates_only = "--rates-only" in sys.argv  # reuse parcels_all; skip loads + spatial joins
 
@@ -604,12 +629,18 @@ def main():
 
     if rates_only:
         print("--rates-only: reusing existing parcels_all + boundary tables")
+        # water_districts may not exist in a db built before this feature.
+        if not con.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name='water_districts'"
+        ).fetchone()[0]:
+            print("loading water districts into existing db ...")
+            _load_water_districts(con)
     else:
         print("loading TIGER boundaries (63-county region) ...")
         _load_geodata(con)
 
     _load_side_attrs(con)
-    _attach_rates_and_export(con, city_rates, isd_rates)
+    _attach_rates_and_export(con, city_rates, isd_rates, wd_rates)
     print("done.")
     return 0
 
@@ -651,6 +682,7 @@ def _load_geodata(con):
           FROM ST_Read('{UNSD_SHP}')
         ) WHERE ST_Intersects(geom, {bbox})"""
     )
+    _load_water_districts(con, bbox)
 
     con.execute("DROP TABLE IF EXISTS parcels_all")
     con.execute(
@@ -735,7 +767,89 @@ def _adjacency_by_ptad(con):
     return adj
 
 
-def _attach_rates_and_export(con, city_rates, isd_rates):
+def _load_water_districts(con, bbox=None):
+    """(Re)load active TCEQ water-district polygons, region-clipped. bbox may
+    be None in --rates-only mode; then it's derived from county_bounds."""
+    if bbox is None:
+        xmin, ymin, xmax, ymax = con.execute(
+            """SELECT min(ST_XMin(geom)) - 0.1, min(ST_YMin(geom)) - 0.1,
+                      max(ST_XMax(geom)) + 0.1, max(ST_YMax(geom)) + 0.1
+            FROM county_bounds"""
+        ).fetchone()
+        bbox = f"ST_SetCRS(ST_MakeEnvelope({xmin}, {ymin}, {xmax}, {ymax}), 'EPSG:4326')"
+    if WATER_DISTRICTS.exists():
+        con.execute(
+            f"""CREATE OR REPLACE TABLE water_districts AS
+            SELECT NAME AS wd_name, TYPE AS wd_type, geom
+            FROM ST_Read('{WATER_DISTRICTS}')
+            WHERE STATUS = 'A' AND ST_Intersects(geom, {bbox})"""
+        )
+        print("water districts:", con.execute("SELECT count(*) FROM water_districts").fetchone()[0])
+    else:
+        con.execute("CREATE OR REPLACE TABLE water_districts(wd_name TEXT, wd_type TEXT, geom GEOMETRY)")
+        print("WARNING: no TCEQ water-district file — special districts skipped")
+
+
+def _attach_special_districts(con, wd_rates, ptad_of, base_ids):
+    """Build parcel_special(uid, special_rate, special_names) from the parcel ∈
+    water-district spatial join + PTAD name match, keyed by a unique per-parcel
+    row id (uid) so parcels that share prop_id='0'/blank addr don't fan out."""
+    # Ensure every parcel row has a stable unique id (works in --rates-only:
+    # parcels_all may predate this column).
+    cols = [r[1] for r in con.execute("PRAGMA table_info('parcels_all')").fetchall()]
+    if "uid" not in cols:
+        con.execute("CREATE OR REPLACE TABLE parcels_all AS SELECT row_number() OVER () AS uid, * FROM parcels_all")
+
+    have_wd = con.execute("SELECT count(*) FROM water_districts").fetchone()[0]
+    con.execute("CREATE OR REPLACE TABLE parcel_special(uid BIGINT, special_rate DOUBLE, special_names TEXT)")
+    if not have_wd:
+        print("special districts: none (no water-district polygons loaded)")
+        return
+
+    # One expensive point-in-polygon pass → parcel uid × district name.
+    con.execute(
+        """CREATE OR REPLACE TABLE parcel_wd AS
+        SELECT p.uid, p.county, w.wd_name
+        FROM parcels_all p JOIN water_districts w
+          ON ST_Within(ST_PointOnSurface(p.geom), w.geom)"""
+    )
+    # Resolve each distinct (parcel county, district name) → a PTAD taxing unit
+    # in that county. Skip units already in the county base (FCD/hospital/port
+    # etc. would otherwise be double-counted across the whole county).
+    pairs = con.execute("SELECT DISTINCT county, wd_name FROM parcel_wd").fetchall()
+    rated, skipped_base = [], 0
+    for county, wd_name in pairs:
+        hit = wd_rates.get((ptad_of.get(county), norm_wd(wd_name)))
+        if not hit:
+            continue
+        if hit[0] in base_ids.get(ptad_of.get(county), ()):  # already in base
+            skipped_base += 1
+            continue
+        rated.append((county, wd_name, hit[0], hit[1], hit[2]))
+    con.execute(
+        """CREATE OR REPLACE TABLE wd_rate_map(
+           county TEXT, wd_name TEXT, unit_id TEXT, unit_name TEXT, rate DOUBLE)"""
+    )
+    con.executemany("INSERT INTO wd_rate_map VALUES (?,?,?,?,?)", rated)
+    print(f"special districts: {len(pairs)} parcel-districts, {len(rated)} matched "
+          f"to a taxing unit ({skipped_base} skipped as already-in-base)")
+
+    # Sum DISTINCT units per parcel (dedupe overlapping polygons → same unit).
+    con.execute(
+        """CREATE OR REPLACE TABLE parcel_special AS
+        SELECT uid, round(sum(rate), 4) AS special_rate,
+               string_agg(unit_name || '=' || rate, '; ' ORDER BY unit_name) AS special_names
+        FROM (
+          SELECT DISTINCT j.uid, m.unit_id, m.unit_name, m.rate
+          FROM parcel_wd j JOIN wd_rate_map m
+            ON m.county = j.county AND m.wd_name = j.wd_name
+        ) GROUP BY uid"""
+    )
+    n = con.execute("SELECT count(*) FROM parcel_special").fetchone()[0]
+    print(f"  parcels gaining a special-district rate: {n}")
+
+
+def _attach_rates_and_export(con, city_rates, isd_rates, wd_rates=None):
     unmatched = set()
     adj = _adjacency_by_ptad(con)
     ptad_of = {n: c["ptad"] for n, c in COUNTIES.items()}
@@ -777,6 +891,17 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
            county TEXT, isd_name TEXT, unit_name TEXT, unit_id TEXT, rate DOUBLE)"""
     )
     con.executemany("INSERT INTO isd_rate_map VALUES (?,?,?,?,?)", isd_map)
+
+    # ── special districts (MUD/WCID/…): parcel ∈ TCEQ water-district polygon,
+    # district name matched to a PTAD taxing unit in the parcel's county.
+    # Conservative: only PTAD-rated matches (non-taxing districts add nothing);
+    # deduped by unit so overlapping master/defined-area polygons that map to
+    # the same unit count once, while genuinely distinct units sum.
+    base_ids = {}
+    for cfg in COUNTIES.values():
+        base_ids.setdefault(cfg["ptad"], set()).update(cfg["countywide"])
+    _attach_special_districts(con, wd_rates or {}, ptad_of, base_ids)
+
     (BUILD / "unmatched.txt").write_text("\n".join(sorted(unmatched)) or "none\n")
     print(f"unmatched boundary names: {len(unmatched)}")
     for u in sorted(unmatched):
@@ -784,12 +909,14 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
 
     con.execute(
         """CREATE OR REPLACE TABLE parcels_rated AS
-        SELECT p.prop_id, p.addr, p.mkt, p.county, p.city_name, p.isd_name,
-               p.base + coalesce(c.rate, 0) + coalesce(i.rate, 0) AS nominal_rate,
+        SELECT p.uid, p.prop_id, p.addr, p.mkt, p.county, p.city_name, p.isd_name,
+               p.base + coalesce(c.rate, 0) + coalesce(i.rate, 0)
+                 + coalesce(s.special_rate, 0) AS nominal_rate,
                p.geom
         FROM parcels_all p
         LEFT JOIN city_rate_map c ON c.county = p.county AND c.city_name = p.city_name
-        LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name"""
+        LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name
+        LEFT JOIN parcel_special s ON s.uid = p.uid"""
     )
     for row in con.execute(
         """SELECT county, count(*), round(min(nominal_rate),4), round(median(nominal_rate),4),
@@ -807,6 +934,8 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
             f"""COPY (
               SELECT p.prop_id AS id, p.addr, p.mkt::BIGINT AS mkt, round(p.nominal_rate, 4) AS rate,
                      round(coalesce(i.rate, 0), 4) AS isdr,
+                     round(coalesce(s.special_rate, 0), 4) AS sd,
+                     s.special_names AS sdn,
                      p.isd_name AS isd, p.city_name AS cj, p.county AS cty,
                      a.owner AS own,
                      round(CASE WHEN coalesce(a.gis_area, 0) > 0 THEN a.gis_area
@@ -815,6 +944,7 @@ def _attach_rates_and_export(con, city_rates, isd_rates):
               FROM parcels_rated p
               JOIN county_region r ON r.county = p.county AND r.region = '{region}'
               LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name
+              LEFT JOIN parcel_special s ON s.uid = p.uid
               LEFT JOIN parcel_attrs a ON a.county = p.county AND a.prop_id = p.prop_id
             ) TO '{out}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')"""
         )

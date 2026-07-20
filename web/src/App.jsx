@@ -53,6 +53,14 @@ const jurisdictionRows = (p) => {
   }
   const isdr = Number(p.isdr ?? 0);
   if (isdr > 0 && p.isd) rows.push({ label: p.isd, rate: isdr });
+  // Special districts (MUD/WCID/…): tile field `sdn` = "Name=rate; …".
+  if (p.sdn) {
+    for (const part of String(p.sdn).split(";")) {
+      const [name, rate] = part.split("=");
+      const r = Number(rate);
+      if (name && r > 0) rows.push({ label: name.trim(), rate: r });
+    }
+  }
   const sum = rows.reduce((a, r) => a + r.rate, 0);
   // Flag if components don't reconstruct the tile total (partial data): the
   // difference is unattributed special districts not yet itemized.
