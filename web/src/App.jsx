@@ -656,7 +656,7 @@ export default function App() {
               </div>
               ${jurHtml}
               ${cadHtml}
-              <div class="card-note">v0: county-wide + city + ISD units; special districts pending roll data</div>
+              <div class="card-note">County + city + ISD + water districts (MUD/WCID). ESD/PID & exact roll stacks still pending.</div>
             </div>`
           )
           .addTo(map);

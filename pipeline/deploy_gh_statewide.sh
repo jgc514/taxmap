@@ -93,7 +93,7 @@ MAIN_DIR="$SCRATCH/ghpages-main"
 if [ ! -d "$MAIN_DIR/.git" ]; then
   mkdir -p "$MAIN_DIR" && (cd "$MAIN_DIR" && git init -q -b gh-pages \
     && git remote add origin "https://github.com/$OWNER/taxmap.git" \
-    && git config http.postBuffer 524288000)
+    && git config http.postBuffer 2000000000)
 fi
 rsync -a --delete --exclude ".git" "$ROOT/web/dist/" "$MAIN_DIR/"
 rm -rf "$MAIN_DIR/tiles"; mkdir -p "$MAIN_DIR/tiles"
@@ -106,7 +106,7 @@ for i in "${!repo_lists[@]+"${!repo_lists[@]}"}"; do
   if [ ! -d "$dir/.git" ]; then
     mkdir -p "$dir" && (cd "$dir" && git init -q -b gh-pages \
       && git remote add origin "https://github.com/$OWNER/$repo.git" \
-      && git config http.postBuffer 524288000)
+      && git config http.postBuffer 2000000000)
   fi
   mkdir -p "$dir/tiles"
   for a in ${repo_lists[i]}; do cp "$WEB_TILES/$a.pmtiles" "$dir/tiles/"; done

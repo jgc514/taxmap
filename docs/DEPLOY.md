@@ -47,7 +47,8 @@ Then Pages → custom domain → `<yourdomain>` (first deploy only).
 ## Annual refresh runbook (each fall when new rates/rolls land)
 
 1. Update year constants + source URLs in `pipeline/` for the new tax year.
-2. `pipeline/download_phase0.sh` (+ county roll downloads)
+2. `pipeline/download_phase0.sh`, `pipeline/download_statewide.sh`,
+   `pipeline/download_water_districts.py` (TCEQ MUD/WCID boundaries)
 3. `.venv/bin/python pipeline/build_metro.py && pipeline/build_tiles.sh`
 4. Upload as `metro-<year>.pmtiles`, update `VITE_TILES_URL`/archive name, redeploy.
 

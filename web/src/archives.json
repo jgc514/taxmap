@@ -64,6 +64,10 @@
     "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx16-b-2025.pmtiles"
   },
   {
+    "name": "tx16-c-2025",
+    "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx16-c-2025.pmtiles"
+  },
+  {
     "name": "tx17-2025",
     "url": "https://jgc514.github.io/taxmap-tiles-1/tiles/tx17-2025.pmtiles"
   },
