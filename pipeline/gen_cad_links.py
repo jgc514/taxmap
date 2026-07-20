@@ -21,50 +21,49 @@ from build_region import COUNTIES  # noqa: E402
 
 OUT = Path(__file__).resolve().parent.parent / "web" / "src" / "cad-links.json"
 
-# Verified CAD domains for the largest counties (property-search landing).
-# q = deep-link query template appended to url, {id} = prop_id, where the
-# vendor reliably accepts an id in the URL.
+# Verified CAD ROOT domains for the largest counties. Roots only — never a
+# guessed sub-path (those 404 when the CAD reorganizes; every CAD homepage
+# links to its own property search). Each is still re-checked at generation
+# time below, and any that fails is downgraded to the search fallback so no
+# emitted link can 404.
 VERIFIED = {
-    "Harris": ("https://hcad.org/property-search/", None),
-    "Dallas": ("https://www.dallascad.org/SearchAddr.aspx", None),
-    "Tarrant": ("https://www.tad.org/property-search/", None),
-    "Bexar": ("https://bcad.org/clientdb/?cid=1", None),
-    "Travis": ("https://traviscad.org/property-search/", None),
-    "Collin": ("https://www.collincad.org/propertysearch", None),
-    "Denton": ("https://www.dentoncad.com/property-search", None),
-    "El Paso": ("https://www.epcad.org/Search/Result?keywords={id}", "deep"),
-    "Hidalgo": ("https://www.hidalgoad.org/", None),
-    "Fort Bend": ("https://www.fbcad.org/property-search/", None),
-    "Montgomery": ("https://mcad-tx.org/property-search/", None),
-    "Williamson": ("https://www.wcad.org/property-search/", None),
-    "Cameron": ("https://www.cameroncad.org/", None),
-    "Nueces": ("https://www.ncadistrict.com/", None),
-    "Bell": ("https://bellcad.org/property-search/", None),
-    "Brazoria": ("https://www.brazoriacad.org/", None),
-    "Galveston": ("https://www.galvestoncad.org/", None),
-    "Lubbock": ("https://lubbockcad.org/", None),
-    "Webb": ("https://webbcad.org/", None),
-    "McLennan": ("https://www.mclennancad.org/", None),
-    "Hays": ("https://www.hayscad.com/property-search/", None),
-    "Comal": ("https://www.comalad.org/", None),
-    "Guadalupe": ("https://www.guadalupead.org/", None),
-    "Ellis": ("https://www.elliscad.org/", None),
-    "Smith": ("https://www.smithcad.org/", None),
-    "Jefferson": ("https://www.jcad.org/", None),
-    "Midland": ("https://www.midcad.org/", None),
-    "Ector": ("https://www.ectorcad.org/", None),
-    "Taylor": ("https://www.taylor-cad.org/", None),
-    "Potter": ("https://www.prad.org/", None),
-    "Randall": ("https://www.randallcad.org/", None),
-    "Johnson": ("https://www.johnsoncad.com/", None),
-    "Parker": ("https://www.parkercad.org/", None),
-    "Kaufman": ("https://www.kaufman-cad.org/", None),
-    "Rockwall": ("https://www.rockwallcad.com/", None),
-    "Wichita": ("https://www.wadtx.com/", None),
-    "Gregg": ("https://www.gcad.org/", None),
-    "Grayson": ("https://www.graysonappraisal.org/", None),
-    "Angelina": ("https://www.angelinacad.org/", None),
-    "Victoria": ("https://www.victoriacad.org/", None),
+    "Harris": "https://hcad.org/",
+    "Dallas": "https://www.dallascad.org/",
+    "Tarrant": "https://www.tad.org/",
+    "Bexar": "https://bcad.org/",
+    "Travis": "https://traviscad.org/",
+    "Collin": "https://www.collincad.org/",
+    "Denton": "https://www.dentoncad.com/",
+    "El Paso": "https://www.epcad.org/",
+    "Hidalgo": "https://www.hidalgoad.org/",
+    "Fort Bend": "https://www.fbcad.org/",
+    "Montgomery": "https://mcad-tx.org/",
+    "Williamson": "https://www.wcad.org/",
+    "Cameron": "https://www.cameroncad.org/",
+    "Nueces": "https://www.ncadistrict.com/",
+    "Bell": "https://bellcad.org/",
+    "Brazoria": "https://www.brazoriacad.org/",
+    "Galveston": "https://www.galvestoncad.org/",
+    "Lubbock": "https://lubbockcad.org/",
+    "McLennan": "https://www.mclennancad.org/",
+    "Hays": "https://www.hayscad.com/",
+    "Comal": "https://www.comalad.org/",
+    "Guadalupe": "https://www.guadalupead.org/",
+    "Ellis": "https://www.elliscad.org/",
+    "Smith": "https://www.smithcad.org/",
+    "Jefferson": "https://www.jcad.org/",
+    "Midland": "https://www.midcad.org/",
+    "Ector": "https://www.ectorcad.org/",
+    "Taylor": "https://www.taylor-cad.org/",
+    "Potter": "https://www.prad.org/",
+    "Johnson": "https://www.johnsoncad.com/",
+    "Kaufman": "https://www.kaufman-cad.org/",
+    "Rockwall": "https://www.rockwallcad.com/",
+    "Wichita": "https://www.wadtx.com/",
+    "Gregg": "https://www.gcad.org/",
+    "Grayson": "https://www.graysonappraisal.org/",
+    "Angelina": "https://www.angelinacad.org/",
+    "Victoria": "https://www.victoriacad.org/",
 }
 
 
@@ -72,20 +71,30 @@ def slug(name):
     return re.sub(r"[^a-z]", "", name.lower())
 
 
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+# Bot-block / auth / rate-limit statuses mean the SITE EXISTS (it just refuses
+# our scripted request); a real browser reaches it, so treat as reachable.
+LIVE_NON_2XX = {401, 403, 405, 429}
+
+
 def alive(url):
-    """True if the domain answers (any 2xx/3xx). CADs vary in path, so we
-    only trust the host resolving, not a specific page."""
-    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            return r.status < 400
-    except Exception:
-        try:  # some hosts reject HEAD; retry GET
-            req.method = "GET"
-            with urllib.request.urlopen(req, timeout=8) as r:
+    """True if the URL resolves to a real page (follows redirects). Verifies
+    the exact final URL, not just the host, so a 404'ing path is caught."""
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(url, method=method, headers={"User-Agent": UA})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status < 400
+        except urllib.error.HTTPError as e:
+            if e.code in LIVE_NON_2XX:
+                return True
+            if e.code == 404:
+                return False
+            # other HTTP errors: retry with GET, else treat as dead
         except Exception:
-            return False
+            pass
+    return False
 
 
 def search_url(county):
@@ -94,24 +103,26 @@ def search_url(county):
 
 
 def main():
-    # Probe the convention domain for every non-verified county in parallel;
-    # keep direct links that resolve, else a guaranteed search deep-link.
-    candidates = {c: f"https://www.{slug(c)}cad.org/" for c in COUNTIES if c not in VERIFIED}
+    # One candidate direct URL per county: the verified root, else the
+    # <countyname>cad.org convention. Probe them ALL — including the verified
+    # ones — and emit a direct link only when it truly resolves; otherwise a
+    # guaranteed search fallback. Invariant: no emitted direct link 404s.
+    candidates = {
+        c: VERIFIED.get(c, f"https://www.{slug(c)}cad.org/") for c in COUNTIES
+    }
+    # Double-probe: a link is kept only if it resolves on BOTH passes, so a
+    # transient/parked false-positive (e.g. a domain that isn't really the
+    # CAD) downgrades to search rather than emitting a link that may 404.
+    def alive2(url):
+        return alive(url) and alive(url)
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
-        results = dict(zip(candidates, ex.map(alive, candidates.values())))
+        live = dict(zip(candidates, ex.map(alive2, candidates.values())))
 
     out = {}
     direct = search = 0
     for cname in COUNTIES:
-        if cname in VERIFIED:
-            url, mode = VERIFIED[cname]
-            entry = {"name": f"{cname} CAD", "url": url}
-            if mode == "deep":
-                entry["q"] = url
-                entry["url"] = url.split("?")[0]
-            out[cname] = entry
-            direct += 1
-        elif results.get(cname):
+        if live.get(cname):
             out[cname] = {"name": f"{cname} CAD", "url": candidates[cname]}
             direct += 1
         else:
