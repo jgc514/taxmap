@@ -53,6 +53,7 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
 .breakdown { margin-top: 8px; }
 .breakdown summary { font-size: 12px; font-weight: 650; color: #184f95; cursor: pointer; }
+.verified-badge { margin-left: 6px; font-size: 10px; font-weight: 700; color: #0a7c42; background: #e3f5ea; border-radius: 999px; padding: 1px 6px; }
 .breakdown-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 5px; }
 .breakdown-table td { padding: 2px 0; color: #0b0b0b; }
 .breakdown-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
@@ -91,7 +92,79 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   font-size: 13px; color: #52514e;
 }
 
-.maplibregl-popup-content { border-radius: 10px; padding: 12px 14px; font-family: inherit; }
+/* ── compare feature ─────────────────────────────────────────────────── */
+.compare-tray {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 7;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
+  max-width: 92vw; background: rgba(252, 252, 251, 0.97);
+  border: 1px solid rgba(11, 11, 11, 0.12); border-radius: 999px; padding: 7px 12px;
+  box-shadow: 0 4px 16px rgba(11, 11, 11, 0.14);
+}
+.compare-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #0b0b0b;
+  background: #eef3fb; border-radius: 999px; padding: 3px 5px 3px 10px; max-width: 40vw;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.compare-chip button { border: none; background: #d6e2f5; border-radius: 50%; width: 17px; height: 17px; cursor: pointer; color: #184f95; line-height: 1; }
+.compare-hint { font-size: 12px; color: #52514e; }
+.compare-open { font-size: 12.5px; font-weight: 650; color: #fff; background: #184f95; border: none; border-radius: 999px; padding: 5px 12px; cursor: pointer; }
+
+.compare-panel {
+  position: absolute; z-index: 9; right: 12px; top: 12px; width: min(520px, 94vw);
+  max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain;
+  background: #fff; border: 1px solid rgba(11, 11, 11, 0.14); border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(11, 11, 11, 0.2);
+}
+.compare-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid #eee; position: sticky; top: 0; background: #fff; border-radius: 12px 12px 0 0; }
+.compare-close { border: none; background: #f0efec; border-radius: 50%; width: 24px; height: 24px; cursor: pointer; font-size: 13px; }
+.compare-grid { display: grid; grid-template-columns: minmax(84px, 0.9fr) repeat(var(--cols), 1fr); gap: 0; padding: 4px 12px 14px; font-size: 12px; }
+.compare-rowlabel { color: #52514e; padding: 5px 6px 5px 0; border-top: 1px solid #f0efec; display: flex; align-items: center; }
+.compare-rowlabel.small { font-size: 11px; }
+.compare-colhead { padding: 8px 6px; border-bottom: 2px solid #184f95; }
+.compare-addr { font-weight: 650; font-size: 11.5px; color: #0b0b0b; line-height: 1.25; }
+.compare-sub { font-size: 10.5px; color: #52514e; margin-top: 2px; }
+.compare-remove { margin-top: 4px; font-size: 10px; border: none; background: none; color: #b10026; cursor: pointer; padding: 0; }
+.compare-cell { padding: 5px 6px; border-top: 1px solid #f0efec; color: #0b0b0b; font-variant-numeric: tabular-nums; }
+.compare-cell.big { font-size: 17px; font-weight: 700; color: #184f95; }
+.compare-cell.small { font-size: 11px; }
+.compare-section { grid-column: 1 / -1; font-weight: 700; font-size: 11px; color: #184f95; padding: 8px 0 3px; text-transform: uppercase; letter-spacing: 0.03em; border-top: 1px solid #e1e0d9; margin-top: 4px; }
+
+/* ── mobile ──────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .topbar { top: 8px; left: 8px; right: 8px; padding: 8px 11px; }
+  .topbar h1 { font-size: 14px; }
+  .search { width: 100%; max-width: none; }
+  .layers-panel { top: auto; bottom: 92px; right: 8px; width: 132px; padding: 7px 10px; }
+  .legend { bottom: 16px; left: 8px; width: 190px; padding: 8px 11px; }
+  .compare-panel { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 72vh; }
+
+  /* Parcel popup becomes a bottom sheet: full width, scrollable, never off
+     screen, and the map stays put behind it. */
+  .maplibregl-popup {
+    position: fixed !important; left: 0 !important; right: 0 !important;
+    bottom: 0 !important; top: auto !important; transform: none !important;
+    max-width: none !important; width: 100%; z-index: 8;
+  }
+  .maplibregl-popup-content {
+    max-width: none; width: 100%; max-height: 62vh;
+    border-radius: 14px 14px 0 0; padding: 14px 16px 18px;
+    box-shadow: 0 -6px 24px rgba(11, 11, 11, 0.22);
+  }
+  .maplibregl-popup-tip { display: none !important; }
+  .maplibregl-popup-close-button { font-size: 22px; padding: 2px 10px; }
+}
+
+.maplibregl-popup-content {
+  border-radius: 10px; padding: 12px 14px; font-family: inherit;
+  /* Scroll the card internally so tall content doesn't force panning the map */
+  max-height: 70vh; overflow-y: auto; overscroll-behavior: contain;
+  max-width: min(340px, 92vw);
+}
+.compare-btn {
+  width: 100%; margin-bottom: 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+  border: 1px solid #c3c2b7; border-radius: 7px; background: #fff; color: #184f95; padding: 5px 8px;
+}
+.compare-btn:hover { background: #eef3fb; }
 .card-addr { font-size: 12.5px; font-weight: 650; color: #0b0b0b; margin-bottom: 2px; }
 .card-rate { font-size: 20px; font-weight: 700; color: #184f95; margin-bottom: 6px; }
 .card-rate span { font-size: 11px; font-weight: 500; color: #52514e; margin-left: 5px; }

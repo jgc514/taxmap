@@ -902,6 +902,12 @@ def _attach_rates_and_export(con, city_rates, isd_rates, wd_rates=None):
         base_ids.setdefault(cfg["ptad"], set()).update(cfg["countywide"])
     _attach_special_districts(con, wd_rates or {}, ptad_of, base_ids)
 
+    # Phase 2: exact per-parcel rates from ingested appraisal rolls (overrides
+    # the spatial approximation for those counties — captures ESD/PID/MUD
+    # exactly). roll_rated(county, prop_id, nominal_rate, isd_rate, stack).
+    from roll_rates import build_roll_rated
+    build_roll_rated(con, ptad_of)
+
     (BUILD / "unmatched.txt").write_text("\n".join(sorted(unmatched)) or "none\n")
     print(f"unmatched boundary names: {len(unmatched)}")
     for u in sorted(unmatched):
@@ -910,13 +916,16 @@ def _attach_rates_and_export(con, city_rates, isd_rates, wd_rates=None):
     con.execute(
         """CREATE OR REPLACE TABLE parcels_rated AS
         SELECT p.uid, p.prop_id, p.addr, p.mkt, p.county, p.city_name, p.isd_name,
-               p.base + coalesce(c.rate, 0) + coalesce(i.rate, 0)
-                 + coalesce(s.special_rate, 0) AS nominal_rate,
+               -- roll-verified exact rate wins; else spatial approximation
+               coalesce(rr.nominal_rate,
+                        p.base + coalesce(c.rate, 0) + coalesce(i.rate, 0)
+                          + coalesce(s.special_rate, 0)) AS nominal_rate,
                p.geom
         FROM parcels_all p
         LEFT JOIN city_rate_map c ON c.county = p.county AND c.city_name = p.city_name
         LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name
-        LEFT JOIN parcel_special s ON s.uid = p.uid"""
+        LEFT JOIN parcel_special s ON s.uid = p.uid
+        LEFT JOIN roll_rated rr ON rr.county = p.county AND rr.prop_id = p.prop_id"""
     )
     for row in con.execute(
         """SELECT county, count(*), round(min(nominal_rate),4), round(median(nominal_rate),4),
@@ -933,9 +942,12 @@ def _attach_rates_and_export(con, city_rates, isd_rates, wd_rates=None):
         con.execute(
             f"""COPY (
               SELECT p.prop_id AS id, p.addr, p.mkt::BIGINT AS mkt, round(p.nominal_rate, 4) AS rate,
-                     round(coalesce(i.rate, 0), 4) AS isdr,
-                     round(coalesce(s.special_rate, 0), 4) AS sd,
-                     s.special_names AS sdn,
+                     -- roll-verified parcels: isdr + full stack come from the roll
+                     round(coalesce(rr.isd_rate, i.rate, 0), 4) AS isdr,
+                     round(CASE WHEN rr.prop_id IS NOT NULL THEN 0
+                                ELSE coalesce(s.special_rate, 0) END, 4) AS sd,
+                     coalesce(rr.stack, s.special_names) AS sdn,
+                     CASE WHEN rr.prop_id IS NOT NULL THEN 1 ELSE 0 END AS rv,
                      p.isd_name AS isd, p.city_name AS cj, p.county AS cty,
                      a.owner AS own,
                      round(CASE WHEN coalesce(a.gis_area, 0) > 0 THEN a.gis_area
@@ -945,6 +957,7 @@ def _attach_rates_and_export(con, city_rates, isd_rates, wd_rates=None):
               JOIN county_region r ON r.county = p.county AND r.region = '{region}'
               LEFT JOIN isd_rate_map i ON i.county = p.county AND i.isd_name = p.isd_name
               LEFT JOIN parcel_special s ON s.uid = p.uid
+              LEFT JOIN roll_rated rr ON rr.county = p.county AND rr.prop_id = p.prop_id
               LEFT JOIN parcel_attrs a ON a.county = p.county AND a.prop_id = p.prop_id
             ) TO '{out}' WITH (FORMAT GDAL, DRIVER 'GeoJSONSeq')"""
         )

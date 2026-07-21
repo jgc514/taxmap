@@ -44,6 +44,17 @@ const normCity = (name) =>
 // Returns rows [{label, rate}] whose rates sum to the parcel's total, or null
 // if the county isn't in the breakdown table.
 const jurisdictionRows = (p) => {
+  // Roll-verified parcels carry their entire authoritative unit stack in `sdn`
+  // ("Name=rate; …") — render it verbatim; it already sums to the total.
+  if (p.rv && p.sdn) {
+    const rows = [];
+    for (const part of String(p.sdn).split(";")) {
+      const [name, rate] = part.split("=");
+      const r = Number(rate);
+      if (name && r > 0) rows.push({ label: name.trim(), rate: r });
+    }
+    return { rows, gap: 0, verified: true };
+  }
   const b = RATE_BREAKDOWN[p.cty];
   if (!b) return null;
   const rows = b.base_units.map((u) => ({ label: u.name, rate: u.rate }));
@@ -254,6 +265,24 @@ export default function App() {
     if (!map || !map.getLayer("flood-overlay")) return;
     map.setLayoutProperty("flood-overlay", "visibility", flood ? "visible" : "none");
   }, [flood]);
+
+  const [compareList, setCompareList] = useState([]); // up to 2 parcel prop objects
+  const [compareOpen, setCompareOpen] = useState(false);
+  const addCompareRef = useRef(null);
+  addCompareRef.current = (p) => {
+    setCompareList((cur) => {
+      if (cur.some((x) => x.id === p.id && x.cty === p.cty && x.addr === p.addr)) return cur;
+      const next = [...cur, p].slice(-2); // keep the two most recent
+      if (next.length === 2) setCompareOpen(true);
+      return next;
+    });
+  };
+  const removeCompare = (i) =>
+    setCompareList((cur) => {
+      const next = cur.filter((_, k) => k !== i);
+      if (next.length < 2) setCompareOpen(false);
+      return next;
+    });
 
   const [query, setQuery] = useState("");
   const [suggests, setSuggests] = useState([]);
@@ -609,8 +638,11 @@ export default function App() {
             ? `<tr><td>Perimeter</td><td>≈ ${fmtDist(dims.perimeter)} (${dims.sides.length} sides)</td></tr>`
             : "";
         const jur = jurisdictionRows(p);
+        const verifiedBadge = jur && jur.verified
+          ? `<span class="verified-badge" title="Exact taxing-unit stack from the county appraisal roll">✓ roll-verified</span>`
+          : "";
         const jurHtml = jur
-          ? `<details class="breakdown"><summary>Jurisdiction breakdown</summary>
+          ? `<details class="breakdown"${jur.verified ? " open" : ""}><summary>Jurisdiction breakdown${verifiedBadge}</summary>
                <table class="breakdown-table">
                  ${jur.rows
                    .map((r) => `<tr><td>${r.label}</td><td>${r.rate.toFixed(4)}%</td></tr>`)
@@ -631,6 +663,7 @@ export default function App() {
             `<div class="card">
               <div class="card-addr">${p.addr || "(no situs address)"}</div>
               <div class="card-rate">${Number(p.rate).toFixed(4)}%<span> nominal rate</span></div>
+              <button class="compare-btn">＋ Compare this property</button>
               <table>
                 <tr><td>Owner</td><td>${p.own || "—"}</td></tr>
                 <tr><td>Lot size</td><td>${fmtAcres(p.ac)}</td></tr>
@@ -656,7 +689,7 @@ export default function App() {
               </div>
               ${jurHtml}
               ${cadHtml}
-              <div class="card-note">County + city + ISD + water districts (MUD/WCID). ESD/PID & exact roll stacks still pending.</div>
+              <div class="card-note">${p.rv ? "Exact taxing-unit stack from the county appraisal roll." : "County + city + ISD + water districts (MUD/WCID). ESD/PID exact for roll-verified counties."}</div>
             </div>`
           )
           .addTo(map);
@@ -678,6 +711,10 @@ export default function App() {
         input.addEventListener("input", update);
         for (const box of Object.values(exBoxes)) box.addEventListener("change", update);
         update();
+        el.querySelector(".compare-btn")?.addEventListener("click", () => {
+          addCompareRef.current?.({ ...p });
+          popup.remove();
+        });
         // Prop_ID '0' means the CAD shared no id (much of Travis): an id-based
         // outline would light up every such parcel in the county, so skip it.
         if (p.id && p.id !== "0") {
@@ -811,6 +848,85 @@ export default function App() {
         <div className="legend-hint">Zoom in past the district level to see individual parcels</div>
       </div>
       {status && <div className="status">{status}</div>}
+
+      {compareList.length > 0 && !compareOpen && (
+        <div className="compare-tray">
+          {compareList.map((c, i) => (
+            <span key={i} className="compare-chip">
+              {(c.addr || c.id || "parcel").split(",")[0]}
+              <button onClick={() => removeCompare(i)} aria-label="remove">✕</button>
+            </span>
+          ))}
+          {compareList.length === 1 ? (
+            <span className="compare-hint">Pick another property to compare</span>
+          ) : (
+            <button className="compare-open" onClick={() => setCompareOpen(true)}>Compare →</button>
+          )}
+        </div>
+      )}
+
+      {compareOpen && compareList.length === 2 && (
+        <ComparePanel items={compareList} onClose={() => setCompareOpen(false)} onRemove={removeCompare} />
+      )}
+    </div>
+  );
+}
+
+// Side-by-side comparison of two selected properties: headline figures plus a
+// jurisdiction table aligned on the union of both properties' taxing units.
+function ComparePanel({ items, onClose, onRemove }) {
+  const cols = items.map((p) => {
+    const jur = jurisdictionRows(p);
+    const est = p.mkt > 0 ? (p.mkt * p.rate) / 100 : null;
+    const units = new Map((jur?.rows || []).map((r) => [r.label, r.rate]));
+    return { p, jur, est, units };
+  });
+  const labels = [...new Set(cols.flatMap((c) => [...c.units.keys()]))];
+  const rate = (n) => `${Number(n).toFixed(4)}%`;
+  return (
+    <div className="compare-panel">
+      <div className="compare-head">
+        <strong>Compare properties</strong>
+        <button className="compare-close" onClick={onClose}>✕</button>
+      </div>
+      <div className="compare-grid" style={{ "--cols": cols.length }}>
+        <div className="compare-rowlabel" />
+        {cols.map((c, i) => (
+          <div key={i} className="compare-colhead">
+            <div className="compare-addr">{c.p.addr || `Property ${i + 1}`}</div>
+            <div className="compare-sub">{c.p.cty} County{c.p.rv ? " · ✓ roll-verified" : ""}</div>
+            <button className="compare-remove" onClick={() => onRemove(i)}>Remove</button>
+          </div>
+        ))}
+
+        <div className="compare-rowlabel">Nominal rate</div>
+        {cols.map((c, i) => <div key={i} className="compare-cell big">{rate(c.p.rate)}</div>)}
+
+        <div className="compare-rowlabel">Market value</div>
+        {cols.map((c, i) => <div key={i} className="compare-cell">{fmtUSD(c.p.mkt)}</div>)}
+
+        <div className="compare-rowlabel">Est. annual tax</div>
+        {cols.map((c, i) => <div key={i} className="compare-cell">{c.est ? fmtUSD(c.est) : "—"}</div>)}
+
+        <div className="compare-rowlabel">School district</div>
+        {cols.map((c, i) => <div key={i} className="compare-cell small">{c.p.isd || "—"}</div>)}
+
+        <div className="compare-rowlabel">City</div>
+        {cols.map((c, i) => <div key={i} className="compare-cell small">{c.p.cj || "Unincorporated"}</div>)}
+
+        <div className="compare-section">Jurisdictions</div>
+
+        {labels.map((label) => (
+          <React.Fragment key={label}>
+            <div className="compare-rowlabel small">{label}</div>
+            {cols.map((c, i) => (
+              <div key={i} className="compare-cell small">
+                {c.units.has(label) ? rate(c.units.get(label)) : "—"}
+              </div>
+            ))}
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 }
