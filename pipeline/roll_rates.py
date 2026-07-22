@@ -85,24 +85,32 @@ def build_matcher(con, ptad_code):
         return v
 
     def match(county_code, entity_name):
-        """Return (unit_name, rate, unit_type) or None."""
-        pool_codes = {county_code} | adj.get(county_code, set())
-        cands = [(un, ur, ut) for cc in pool_codes for (un, ur, ut) in ptad.get(cc, []) if ur > 0]
+        """Return (unit_name, rate, unit_type) or None. Resolve within the
+        parcel's OWN county first (exact → ESD-number → fuzzy), only then fall
+        back to adjacent counties — otherwise a numbered ESD/WCID would match
+        a same-numbered district in a neighboring county (e.g. Wilson's 'ESD 1'
+        wrongly hitting Atascosa ESD #1)."""
+        own = [(un, ur, ut) for (un, ur, ut) in ptad.get(county_code, []) if ur > 0]
+        near = [(un, ur, ut) for cc in adj.get(county_code, set())
+                for (un, ur, ut) in ptad.get(cc, []) if ur > 0]
         nn = nc(entity_name)
-        for un, ur, ut in cands:
-            if nc(un) == nn:
-                return (un, ur, ut)
         ek = _esd_key(entity_name)
-        if ek:
+        for cands in (own, near):
             for un, ur, ut in cands:
-                if _esd_key(un) == ek:
+                if nc(un) == nn:
                     return (un, ur, ut)
-        best = None
-        for un, ur, ut in cands:
-            r = SequenceMatcher(None, nn, nc(un)).ratio()
-            if r >= 0.9 and (best is None or r > best[3]):
-                best = (un, ur, ut, r)
-        return (best[0], best[1], best[2]) if best else None
+            if ek:
+                for un, ur, ut in cands:
+                    if _esd_key(un) == ek:
+                        return (un, ur, ut)
+            best = None
+            for un, ur, ut in cands:
+                r = SequenceMatcher(None, nn, nc(un)).ratio()
+                if r >= 0.9 and (best is None or r > best[3]):
+                    best = (un, ur, ut, r)
+            if best:
+                return (best[0], best[1], best[2])
+        return None
 
     return match
 
