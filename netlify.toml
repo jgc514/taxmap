@@ -1,9 +1,9 @@
 [build]
-  command = "cd web && npm install && VITE_TILES_URL=https://jgc514.github.io/taxmap/tiles npm run build"
+  command = "cd web && npm install && npm run build"
   publish = "web/dist"
 
 [context.production]
-  command = "cd web && npm install && VITE_TILES_URL=https://jgc514.github.io/taxmap/tiles npm run build"
+  command = "cd web && npm install && npm run build"
   publish = "web/dist"
 
 [[redirects]]
