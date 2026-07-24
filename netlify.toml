@@ -1,9 +1,13 @@
+# Parcel tiles are large (~1.8GB) and intentionally gitignored, so they are NOT
+# in this repo or the Netlify deploy. They are hosted on GitHub Pages instead.
+# VITE_TILES_URL points the 16 bare-name archives at jgc514.github.io/taxmap/tiles;
+# the remaining overflow archives carry absolute URLs in web/src/archives.json.
 [build]
-  command = "cd web && npm install && npm run build"
+  command = "cd web && npm install && VITE_TILES_URL=https://jgc514.github.io/taxmap/tiles npm run build"
   publish = "web/dist"
 
 [context.production]
-  command = "cd web && npm install && npm run build"
+  command = "cd web && npm install && VITE_TILES_URL=https://jgc514.github.io/taxmap/tiles npm run build"
   publish = "web/dist"
 
 [[redirects]]
