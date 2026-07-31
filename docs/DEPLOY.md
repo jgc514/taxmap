@@ -82,3 +82,23 @@ done
 ```
 (The Cloudflare R2 path above remains the long-term home — no cold-cache issue,
 single archive, custom domain.)
+
+## Statewide search index (owner / address / property ID)
+
+Built by `pipeline/build_search_index.py` (reads `data/build/taxmap.duckdb`,
+writes `data/search/{owner,addr,id}` — prefix-sharded, sorted, pre-gzipped
+TSVs + manifests; format and sharding contract documented in the script,
+mirrored by the client in `web/src/App.jsx`).
+
+Hosted as two public GitHub Pages data repos (repo checkouts live in
+`data/search-repos/`, and `data/search/*` symlinks into them):
+
+- `jgc514/taxmap-search-1` — `owner/` (~406MB gz) + `meta.json`
+- `jgc514/taxmap-search-2` — `addr/` + `id/` (~453MB gz) + `meta.json`
+
+Refresh after a data rebuild: rerun the script (regenerates into the
+symlinked dirs), `git add -A && commit && push` in each repo checkout
+(`http.postBuffer 2000000000`). No CDN warming needed — shards are small
+whole-file fetches, no range requests. `.nojekyll` is REQUIRED (the `t_*`
+address shards start with `_`-adjacent names Jekyll would drop, and Jekyll
+would 10x the Pages build time on 26k files).

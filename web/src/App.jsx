@@ -91,6 +91,128 @@ const cadHref = (p) => {
 const TILES_BASE =
   import.meta.env.VITE_TILES_URL || `${location.origin}${import.meta.env.BASE_URL}tiles`;
 
+// ── statewide search index ─────────────────────────────────────────────
+// All 13.8M parcels searchable by owner / situs address / property ID:
+// prefix-sharded pre-gzipped TSVs on GitHub Pages (see
+// pipeline/build_search_index.py for the format + sharding contract).
+// A query maps to 1-2 shards (~0.2-5MB gz), inflated client-side. The
+// ~1GB total splits across two repos like the tile overflow archives;
+// VITE_SEARCH_URL overrides both (local dev against a symlinked copy).
+const searchBase = (mode) =>
+  import.meta.env.VITE_SEARCH_URL ||
+  (mode === "owner"
+    ? "https://jgc514.github.io/taxmap-search-1"
+    : "https://jgc514.github.io/taxmap-search-2");
+
+// Must mirror the SQL normalization in build_search_index.py.
+const snorm = (s) => (s || "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+const prefix3 = (k) => (k.length >= 3 ? k.slice(0, 3) : k);
+const shardFile = (p) => p.replace(/ /g, "_") + ".tsv.gz";
+
+const idxCache = { meta: null, manifests: {}, shards: new Map() };
+const idxMeta = () =>
+  (idxCache.meta ??= fetch(`${searchBase("owner")}/meta.json`).then((r) => r.json()));
+const idxManifest = (mode) =>
+  (idxCache.manifests[mode] ??= fetch(
+    `${searchBase(mode)}/${mode}/manifest.json`
+  ).then((r) => r.json()));
+async function idxShard(mode, prefix, signal) {
+  const key = `${mode}/${prefix}`;
+  const cached = idxCache.shards.get(key);
+  if (cached) return cached;
+  if (!(prefix in (await idxManifest(mode)))) return [];
+  const res = await fetch(`${searchBase(mode)}/${mode}/${shardFile(prefix)}`, { signal });
+  if (!res.ok) return [];
+  const text = await new Response(
+    res.body.pipeThrough(new DecompressionStream("gzip"))
+  ).text();
+  // owner rows: [id, cty, addr, own, lat, lng]; addr/id rows: [id, cty, addr, lat, lng]
+  const rows = text.split("\n").filter(Boolean).map((l) => l.split("\t"));
+  for (const r of rows) r.norm = snorm(mode === "owner" ? r[3] : r[2]);
+  if (idxCache.shards.size >= 12)
+    idxCache.shards.delete(idxCache.shards.keys().next().value);
+  idxCache.shards.set(key, rows);
+  return rows;
+}
+
+async function searchOwnerIdx(q, signal) {
+  const nq = snorm(q);
+  if (nq.length < 3) return [];
+  const toks = nq.split(" ");
+  // Shards key on the start of the stored name (usually the surname); also
+  // try the query's last token so "JOHN SMITH" still reaches the SMI shard.
+  const pres = new Set([prefix3(nq)]);
+  const last = toks[toks.length - 1];
+  if (last.length >= 3) pres.add(prefix3(last));
+  const sets = await Promise.all([...pres].map((p) => idxShard("owner", p, signal)));
+  const seen = new Set();
+  const out = [];
+  for (const rows of sets)
+    for (const r of rows) {
+      if (!toks.every((t) => r.norm.includes(t))) continue;
+      const k = `${r[1]}:${r[0]}:${r[2]}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+      if (out.length >= 500) break;
+    }
+  out.sort(
+    (a, b) =>
+      (a.norm.startsWith(nq) ? 0 : 1) - (b.norm.startsWith(nq) ? 0 : 1) ||
+      a.norm.localeCompare(b.norm)
+  );
+  return out;
+}
+
+async function searchAddrIdx(q, signal) {
+  const nq = snorm(q);
+  if (nq.length < 3) return [];
+  const toks = nq.split(" ");
+  const hasNum = /^\d+$/.test(toks[0]);
+  const street = hasNum ? toks.slice(1) : toks;
+  const prefix = hasNum ? prefix3(toks[0]) : "t_" + prefix3(toks[0]);
+  const rows = await idxShard("addr", prefix, signal);
+  const out = [];
+  for (const r of rows) {
+    if (hasNum && !r.norm.split(" ", 1)[0].startsWith(toks[0])) continue;
+    if (!street.every((t) => r.norm.includes(t))) continue;
+    out.push(r);
+    if (out.length >= 300) break;
+  }
+  out.sort(
+    (a, b) =>
+      (a.norm.startsWith(nq) ? 0 : 1) - (b.norm.startsWith(nq) ? 0 : 1) ||
+      a.norm.length - b.norm.length
+  );
+  return out;
+}
+
+async function searchIdIdx(q, signal) {
+  const k = snorm(q).replace(/ /g, "");
+  if (k.length < 3) return [];
+  const rows = await idxShard("id", prefix3(k), signal);
+  return rows.filter((r) => snorm(r[0]).replace(/ /g, "").startsWith(k)).slice(0, 50);
+}
+
+// Suggestion item from an index row (owner rows carry an extra own column).
+const idxItem = (mode, r, counties) => {
+  const own = mode === "owner" ? r[3] : null;
+  const [lat, lng] = mode === "owner" ? [r[4], r[5]] : [r[3], r[4]];
+  const cty = counties[Number(r[1])] || "";
+  // Some CADs export bare commas for missing situs — treat as absent.
+  const addr = /[A-Za-z0-9]/.test(r[2]) ? r[2] : "(no situs address)";
+  return {
+    label:
+      mode === "owner"
+        ? `${own} · ${addr} — ${cty} Co.`
+        : mode === "id"
+          ? `${r[0]} · ${addr} — ${cty} Co.`
+          : `${addr} — ${cty} Co.`,
+    center: [parseFloat(lng), parseFloat(lat)],
+    parcel: { id: r[0], cty },
+  };
+};
+
 // Parcel tile archives (each under GitHub's 100MB file limit), generated by
 // pipeline/build_tiles_region.sh. The first entry (metro-rest) also carries
 // the county + ISD overview layers. Suffix keys the per-archive source +
@@ -292,17 +414,15 @@ export default function App() {
 
   // Photon geocoder (free, autocomplete-friendly), biased to Texas' center
   // and clipped to the TX bounding box so suggestions stay in-state.
-  const geocodeAddress = (q) => {
-    searchAbort.current?.abort();
-    const ctrl = new AbortController();
-    searchAbort.current = ctrl;
-    const url =
+  const geocodeAddress = (q, signal) =>
+    fetch(
       "https://photon.komoot.io/api/?limit=6&lat=31.3&lon=-99.3&bbox=-106.9,25.6,-93.4,36.6&q=" +
-      encodeURIComponent(q);
-    fetch(url, { signal: ctrl.signal })
+        encodeURIComponent(q),
+      { signal }
+    )
       .then((r) => r.json())
-      .then((d) => {
-        const items = (d.features || [])
+      .then((d) =>
+        (d.features || [])
           .filter((f) => f.properties.state === "Texas" || !f.properties.state)
           .map((f) => {
             const pr = f.properties;
@@ -314,41 +434,34 @@ export default function App() {
               .filter(Boolean)
               .join(", ");
             return { label: line, center: f.geometry.coordinates };
-          });
-        setSuggests(items);
-      })
-      .catch(() => {});
-  };
+          })
+      )
+      .catch(() => []);
 
-  // Owner / Property-ID lookup over parcels currently loaded in the view
-  // (needs parcel zoom). Statewide owner index is a documented next step.
-  const searchLoadedParcels = (q, mode) => {
-    const map = mapRef.current;
-    if (!map || map.getZoom() < 12.5) {
-      setSuggests([{ label: "Zoom in to a neighborhood to search owners / IDs", disabled: true }]);
+  // Statewide search against the sharded index; address mode merges the tax
+  // roll's situs addresses with Photon (roll first — it's what's on the CAD).
+  const runSearch = (q, mode) => {
+    searchAbort.current?.abort();
+    const ctrl = new AbortController();
+    searchAbort.current = ctrl;
+    if (typeof DecompressionStream === "undefined" && mode !== "address") {
+      setSuggests([{ label: "Statewide search needs a newer browser", disabled: true }]);
       return;
     }
-    const layers = PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`).filter((l) => map.getLayer(l));
-    const feats = map.queryRenderedFeatures({ layers });
-    const needle = q.toLowerCase();
-    const seen = new Set();
-    const items = [];
-    for (const f of feats) {
-      const p = f.properties;
-      const hay = mode === "id" ? String(p.id || "") : String(p.own || "").toLowerCase();
-      if (hay && (mode === "id" ? hay === q : hay.includes(needle))) {
-        const key = `${p.cty}:${p.id}:${p.addr}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        items.push({
-          label: `${p.own || "—"} · ${p.addr || p.id}`,
-          center: f.geometry.type === "Point" ? f.geometry.coordinates : undefined,
-          feature: f,
-        });
-        if (items.length >= 8) break;
-      }
-    }
-    setSuggests(items.length ? items : [{ label: "No matches in view", disabled: true }]);
+    const idxSearch =
+      mode === "owner" ? searchOwnerIdx : mode === "id" ? searchIdIdx : searchAddrIdx;
+    const idxP = Promise.all([idxSearch(q, ctrl.signal), idxMeta()])
+      .then(([rows, meta]) => rows.map((r) => idxItem(mode, r, meta.counties)))
+      .catch(() => null); // index unreachable ≠ no matches
+    const photonP = mode === "address" ? geocodeAddress(q, ctrl.signal) : Promise.resolve([]);
+    Promise.all([idxP, photonP]).then(([idx, photon]) => {
+      if (ctrl.signal.aborted) return;
+      const items = [...(idx || []).slice(0, mode === "address" ? 5 : 8), ...photon.slice(0, 4)];
+      if (items.length) setSuggests(items);
+      else if (idx === null && mode !== "address")
+        setSuggests([{ label: "Statewide index unreachable — try again shortly", disabled: true }]);
+      else setSuggests([{ label: "No statewide matches", disabled: true }]);
+    });
   };
 
   const onSearchInput = (v) => {
@@ -358,24 +471,15 @@ export default function App() {
       setSuggests([]);
       return;
     }
-    searchTimer.current = setTimeout(() => {
-      if (searchMode === "address") geocodeAddress(v.trim());
-      else searchLoadedParcels(v.trim(), searchMode);
-    }, 250);
+    searchTimer.current = setTimeout(() => runSearch(v.trim(), searchMode), 250);
   };
 
+  const selectParcelRef = useRef(null);
   const pickSuggest = (s) => {
     if (s.disabled) return;
     const map = mapRef.current;
-    if (s.feature) {
-      const c =
-        s.feature.geometry.type === "Point"
-          ? s.feature.geometry.coordinates
-          : s.center;
-      if (c) map.flyTo({ center: c, zoom: Math.max(map.getZoom(), 16.5) });
-    } else if (s.center) {
-      map.flyTo({ center: s.center, zoom: 17 });
-    }
+    if (s.center) map.flyTo({ center: s.center, zoom: Math.max(map.getZoom(), 17) });
+    if (s.parcel) selectParcelRef.current?.(s.parcel.id, s.parcel.cty);
     setQuery(s.label);
     setSuggests([]);
   };
@@ -624,6 +728,12 @@ export default function App() {
       const setSelection = (filter) => {
         for (const [suffix] of PARCEL_SOURCES) map.setFilter(`parcel-selected${suffix}`, filter);
       };
+      // Search picks outline their parcel once tiles arrive at the fly-to zoom.
+      selectParcelRef.current = (id, cty) => {
+        if (id && id !== "0") {
+          setSelection(["all", ["==", ["get", "id"], id], ["==", ["get", "cty"], cty]]);
+        }
+      };
 
       const onParcelClick = (e) => {
         if (measureRef.current.on) return;
@@ -818,10 +928,10 @@ export default function App() {
             value={query}
             placeholder={
               searchMode === "address"
-                ? "Search an address…"
+                ? "Search an address (statewide)…"
                 : searchMode === "owner"
-                  ? "Owner name (in current view)…"
-                  : "Exact property ID (in current view)…"
+                  ? "Owner name (statewide)…"
+                  : "Property ID (statewide)…"
             }
             onChange={(e) => onSearchInput(e.target.value)}
           />
