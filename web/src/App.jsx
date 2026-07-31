@@ -357,6 +357,17 @@ export default function App() {
   const [status, setStatus] = useState("loading map…");
   const [basemap, setBasemap] = useState("map");
   const [flood, setFlood] = useState(false);
+  // Layers / legend boxes collapse to a pill; choice sticks across visits.
+  const lsGet = (k) => {
+    try { return localStorage.getItem(k); } catch { return null; }
+  };
+  const [layersOpen, setLayersOpen] = useState(() => lsGet("ui.layersOpen") !== "0");
+  const [legendOpen, setLegendOpen] = useState(() => lsGet("ui.legendOpen") !== "0");
+  const togglePanel = (key, set) => () =>
+    set((open) => {
+      try { localStorage.setItem(key, open ? "0" : "1"); } catch { /* private mode */ }
+      return !open;
+    });
   const [measuring, setMeasuring] = useState(false);
   const [measureText, setMeasureText] = useState(null);
   const mapRef = useRef(null);
@@ -950,34 +961,58 @@ export default function App() {
           )}
         </div>
       </header>
-      <div className="layers-panel">
-        <div className="layers-title">Layers</div>
-        {[["map", "Map"], ["sat", "Satellite"], ["topo", "Topo"]].map(([v, label]) => (
-          <label key={v}>
-            <input type="radio" name="basemap" checked={basemap === v} onChange={() => setBasemap(v)} />
-            {label}
-          </label>
-        ))}
-        <label className="layers-sep">
-          <input type="checkbox" checked={flood} onChange={(e) => setFlood(e.target.checked)} />
-          FEMA flood zones
-        </label>
-        <button className={`measure-btn${measuring ? " on" : ""}`} onClick={toggleMeasure}>
-          {measuring ? "✕ Stop measuring" : "📏 Measure"}
+      <div className={`layers-panel${layersOpen ? "" : " closed"}`}>
+        <button
+          className="panel-head"
+          onClick={togglePanel("ui.layersOpen", setLayersOpen)}
+          aria-expanded={layersOpen}
+        >
+          <span className="layers-title">Layers</span>
+          <span className="panel-chevron">{layersOpen ? "▾" : "▸"}</span>
         </button>
-        {measuring && <div className="measure-readout">{measureText || "Click map to add points"}</div>}
+        {layersOpen && (
+          <>
+            {[["map", "Map"], ["sat", "Satellite"], ["topo", "Topo"]].map(([v, label]) => (
+              <label key={v}>
+                <input type="radio" name="basemap" checked={basemap === v} onChange={() => setBasemap(v)} />
+                {label}
+              </label>
+            ))}
+            <label className="layers-sep">
+              <input type="checkbox" checked={flood} onChange={(e) => setFlood(e.target.checked)} />
+              FEMA flood zones
+            </label>
+            <button className={`measure-btn${measuring ? " on" : ""}`} onClick={toggleMeasure}>
+              {measuring ? "✕ Stop measuring" : "📏 Measure"}
+            </button>
+            {measuring && (
+              <div className="measure-readout">{measureText || "Click map to add points"}</div>
+            )}
+          </>
+        )}
       </div>
-      <div className="legend">
-        <div className="legend-title">Nominal tax rate (% of value)</div>
-        <div
-          className="legend-bar"
-          style={{ background: `linear-gradient(to right, ${RATE_STOPS.map(([, c]) => c).join(",")})` }}
-        />
-        <div className="legend-labels">
-          <span>{RATE_STOPS[0][0]}%</span>
-          <span>{RATE_STOPS[RATE_STOPS.length - 1][0]}%</span>
-        </div>
-        <div className="legend-hint">Zoom in past the district level to see individual parcels</div>
+      <div className={`legend${legendOpen ? "" : " closed"}`}>
+        <button
+          className="panel-head"
+          onClick={togglePanel("ui.legendOpen", setLegendOpen)}
+          aria-expanded={legendOpen}
+        >
+          <span className="legend-title">{legendOpen ? "Nominal tax rate (% of value)" : "Legend"}</span>
+          <span className="panel-chevron">{legendOpen ? "▾" : "▸"}</span>
+        </button>
+        {legendOpen && (
+          <>
+            <div
+              className="legend-bar"
+              style={{ background: `linear-gradient(to right, ${RATE_STOPS.map(([, c]) => c).join(",")})` }}
+            />
+            <div className="legend-labels">
+              <span>{RATE_STOPS[0][0]}%</span>
+              <span>{RATE_STOPS[RATE_STOPS.length - 1][0]}%</span>
+            </div>
+            <div className="legend-hint">Zoom in past the district level to see individual parcels</div>
+          </>
+        )}
       </div>
       {status && <div className="status">{status}</div>}
 
