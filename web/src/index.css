@@ -42,7 +42,14 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   width: 100%; border: none; background: none; padding: 0; cursor: pointer;
   font: inherit; text-align: left;
 }
-.panel-chevron { font-size: 10px; color: #898781; line-height: 1; }
+.menu-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; flex: none;
+  border: 1px solid #c3c2b7; border-radius: 7px; background: #fff; color: #184f95;
+  transition: background 0.12s, border-color 0.12s;
+}
+.menu-icon.small { width: 22px; height: 22px; }
+.panel-head:hover .menu-icon { background: #eef3fb; border-color: #184f95; }
 .legend .panel-head { margin-bottom: 7px; }
 .legend.closed .panel-head { margin-bottom: 0; }
 .legend.closed { width: auto; padding: 7px 12px; }

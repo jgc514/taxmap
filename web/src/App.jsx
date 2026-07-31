@@ -343,6 +343,25 @@ const buyerEstimate = (price, rate, isdRate, ex = {}) => {
   return nonSchool + school;
 };
 
+// Collapse-affordance icons for the panel headers.
+const Chevron = ({ up }) => (
+  <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+    <path
+      d={up ? "M3 10l5-5 5 5" : "M3 6l5 5 5-5"}
+      fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+  </svg>
+);
+const Burger = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+    <path
+      d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"
+    />
+  </svg>
+);
+
 const initialView = () => {
   const q = new URLSearchParams(location.search);
   const lat = parseFloat(q.get("lat")), lng = parseFloat(q.get("lng")), z = parseFloat(q.get("z"));
@@ -920,9 +939,10 @@ export default function App() {
           className="panel-head"
           onClick={togglePanel("ui.menuOpen", setMenuOpen)}
           aria-expanded={menuOpen}
+          aria-label={menuOpen ? "Collapse menu" : "Open menu"}
         >
           <h1>Texas Property Tax Map</h1>
-          <span className="panel-chevron">{menuOpen ? "▾" : "▸"}</span>
+          <span className="menu-icon">{menuOpen ? <Chevron up /> : <Burger />}</span>
         </button>
         {menuOpen && (
         <>
@@ -1000,9 +1020,12 @@ export default function App() {
           className="panel-head"
           onClick={togglePanel("ui.legendOpen", setLegendOpen)}
           aria-expanded={legendOpen}
+          aria-label={legendOpen ? "Collapse legend" : "Open legend"}
         >
           <span className="legend-title">{legendOpen ? "Nominal tax rate (% of value)" : "Legend"}</span>
-          <span className="panel-chevron">{legendOpen ? "▾" : "▸"}</span>
+          <span className="menu-icon small">
+            <Chevron up={legendOpen} />
+          </span>
         </button>
         {legendOpen && (
           <>
