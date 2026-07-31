@@ -361,7 +361,7 @@ export default function App() {
   const lsGet = (k) => {
     try { return localStorage.getItem(k); } catch { return null; }
   };
-  const [layersOpen, setLayersOpen] = useState(() => lsGet("ui.layersOpen") !== "0");
+  const [menuOpen, setMenuOpen] = useState(() => lsGet("ui.menuOpen") !== "0");
   const [legendOpen, setLegendOpen] = useState(() => lsGet("ui.legendOpen") !== "0");
   const togglePanel = (key, set) => () =>
     set((open) => {
@@ -915,9 +915,18 @@ export default function App() {
   return (
     <div className="app">
       <div ref={mapDiv} className="map" />
-      <header className="topbar">
-        <h1>Texas Property Tax Map</h1>
-        <span className="badge">v0 · statewide — all 254 counties · 2025 · jurisdictions approximate</span>
+      <header className={`topbar${menuOpen ? "" : " closed"}`}>
+        <button
+          className="panel-head"
+          onClick={togglePanel("ui.menuOpen", setMenuOpen)}
+          aria-expanded={menuOpen}
+        >
+          <h1>Texas Property Tax Map</h1>
+          <span className="panel-chevron">{menuOpen ? "▾" : "▸"}</span>
+        </button>
+        {menuOpen && (
+        <>
+        <span className="badge">2025 tax year · jurisdictions approximate</span>
         <div className="search">
           <div className="search-modes">
             {[["address", "Address"], ["owner", "Owner"], ["id", "Property ID"]].map(([m, label]) => (
@@ -960,37 +969,32 @@ export default function App() {
             </ul>
           )}
         </div>
-      </header>
-      <div className={`layers-panel${layersOpen ? "" : " closed"}`}>
-        <button
-          className="panel-head"
-          onClick={togglePanel("ui.layersOpen", setLayersOpen)}
-          aria-expanded={layersOpen}
-        >
-          <span className="layers-title">Layers</span>
-          <span className="panel-chevron">{layersOpen ? "▾" : "▸"}</span>
-        </button>
-        {layersOpen && (
-          <>
+        <div className="menu-layers">
+          <div className="menu-sub">Layers</div>
+          <div className="basemap-row">
             {[["map", "Map"], ["sat", "Satellite"], ["topo", "Topo"]].map(([v, label]) => (
               <label key={v}>
                 <input type="radio" name="basemap" checked={basemap === v} onChange={() => setBasemap(v)} />
                 {label}
               </label>
             ))}
-            <label className="layers-sep">
+          </div>
+          <div className="layer-row">
+            <label>
               <input type="checkbox" checked={flood} onChange={(e) => setFlood(e.target.checked)} />
               FEMA flood zones
             </label>
             <button className={`measure-btn${measuring ? " on" : ""}`} onClick={toggleMeasure}>
-              {measuring ? "✕ Stop measuring" : "📏 Measure"}
+              {measuring ? "✕ Stop" : "📏 Measure"}
             </button>
-            {measuring && (
-              <div className="measure-readout">{measureText || "Click map to add points"}</div>
-            )}
-          </>
+          </div>
+          {measuring && (
+            <div className="measure-readout">{measureText || "Click map to add points"}</div>
+          )}
+        </div>
+        </>
         )}
-      </div>
+      </header>
       <div className={`legend${legendOpen ? "" : " closed"}`}>
         <button
           className="panel-head"

@@ -13,6 +13,15 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   box-shadow: 0 2px 10px rgba(11, 11, 11, 0.08);
 }
 .topbar h1 { font-size: 15px; color: #0b0b0b; font-weight: 650; }
+.topbar.closed { width: auto; padding: 8px 12px; }
+.topbar .panel-head { gap: 14px; }
+
+/* Layers section inside the top-left menu */
+.menu-layers { margin-top: 10px; border-top: 1px solid #e1e0d9; padding-top: 8px; }
+.menu-sub { font-size: 11px; font-weight: 700; color: #52514e; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+.basemap-row { display: flex; gap: 14px; margin-bottom: 6px; }
+.basemap-row label, .layer-row label { font-size: 12px; color: #0b0b0b; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.layer-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .badge {
   display: inline-block; margin-top: 4px; font-size: 11.5px; color: #52514e;
   background: #f0efec; border-radius: 999px; padding: 2px 9px;
@@ -35,8 +44,8 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 }
 .panel-chevron { font-size: 10px; color: #898781; line-height: 1; }
 .legend .panel-head { margin-bottom: 7px; }
-.legend.closed .panel-head, .layers-panel.closed .panel-head { margin-bottom: 0; }
-.legend.closed, .layers-panel.closed { width: auto; padding: 7px 12px; }
+.legend.closed .panel-head { margin-bottom: 0; }
+.legend.closed { width: auto; padding: 7px 12px; }
 .legend-bar { height: 10px; border-radius: 5px; }
 .legend-labels { display: flex; justify-content: space-between; font-size: 11px; color: #52514e; margin-top: 3px; }
 .legend-hint { font-size: 10.5px; color: #898781; margin-top: 6px; }
@@ -76,19 +85,8 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 }
 .cad-link:hover { text-decoration: underline; }
 
-.layers-panel {
-  position: absolute; top: 110px; right: 10px; z-index: 5;
-  background: rgba(252, 252, 251, 0.95);
-  border: 1px solid rgba(11, 11, 11, 0.1);
-  border-radius: 10px; padding: 9px 12px; width: 150px;
-  box-shadow: 0 2px 10px rgba(11, 11, 11, 0.08);
-  display: flex; flex-direction: column; gap: 4px;
-}
-.layers-title { font-size: 12px; font-weight: 650; color: #0b0b0b; }
-.layers-panel label { font-size: 12px; color: #0b0b0b; display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.layers-sep { border-top: 1px solid #e1e0d9; padding-top: 6px; margin-top: 3px; }
 .measure-btn {
-  margin-top: 5px; font-size: 12px; padding: 4px 8px; cursor: pointer;
+  font-size: 12px; padding: 4px 8px; cursor: pointer;
   border: 1px solid #c3c2b7; border-radius: 7px; background: #fff; color: #0b0b0b;
 }
 .measure-btn.on { background: #184f95; color: #fff; border-color: #184f95; }
@@ -143,9 +141,9 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 /* ── mobile ──────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .topbar { top: 8px; left: 8px; right: 8px; padding: 8px 11px; }
+  .topbar.closed { right: auto; }
   .topbar h1 { font-size: 14px; }
   .search { width: 100%; max-width: none; }
-  .layers-panel { top: auto; bottom: 92px; right: 8px; width: 132px; padding: 7px 10px; }
   .legend { bottom: 16px; left: 8px; width: 190px; padding: 8px 11px; }
   .compare-panel { left: 8px; right: 8px; width: auto; top: auto; bottom: 8px; max-height: 72vh; }
 
