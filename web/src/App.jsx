@@ -657,7 +657,7 @@ export default function App() {
         const cadHtml = cad
           ? `<a class="cad-link" href="${cad.url}" target="_blank" rel="noopener">View on ${cad.name} ↗</a>`
           : "";
-        const popup = new maplibregl.Popup({ maxWidth: "340px" })
+        const popup = new maplibregl.Popup({ maxWidth: "340px", className: "parcel-popup" })
           .setLngLat(e.lngLat)
           .setHTML(
             `<div class="card">
@@ -669,7 +669,7 @@ export default function App() {
                 <tr><td>Lot size</td><td>${fmtAcres(p.ac)}</td></tr>
                 ${dimsRow}
                 <tr><td>Market value</td><td>${fmtUSD(p.mkt)}</td></tr>
-                <tr><td>Est. annual tax</td><td>${est ? fmtUSD(est) : "—"}</td></tr>
+                <tr><td>Est. tax</td><td>${est ? `<strong>${fmtUSD(est / 12)}/mo</strong> <span class="tax-yr">(${fmtUSD(est)}/yr)</span>` : "—"}</td></tr>
                 <tr><td>School district</td><td>${p.isd || "—"}</td></tr>
                 <tr><td>City</td><td>${p.cj || "Unincorporated"}</td></tr>
                 <tr><td>County</td><td>${p.cty}</td></tr>
@@ -677,7 +677,14 @@ export default function App() {
               </table>
               <div class="buyer">
                 <div class="buyer-title">Buyer estimate</div>
-                <label>If purchased at $<input type="text" inputmode="numeric" class="buyer-price" value="${defaultPrice.toLocaleString("en-US")}"></label>
+                <label class="buyer-price-card">
+                  <span class="buyer-price-label">Enter Proposed Purchase Price</span>
+                  <span class="buyer-price-field">
+                    <span class="buyer-price-dollar">$</span>
+                    <input type="text" inputmode="numeric" class="buyer-price" value="${defaultPrice.toLocaleString("en-US")}" aria-label="Proposed purchase price">
+                    <span class="buyer-price-pencil" aria-hidden="true">✎</span>
+                  </span>
+                </label>
                 <div class="buyer-ex">
                   <label><input type="checkbox" class="ex-homestead" checked> Homestead ($140k school)</label>
                   <label><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$60k school)</label>
@@ -693,6 +700,18 @@ export default function App() {
             </div>`
           )
           .addTo(map);
+        // The card is pinned to the screen (centered on desktop, bottom sheet
+        // on mobile), so glide the clicked parcel out from behind it — beside
+        // the card on desktop, above the sheet on mobile — instead of making
+        // the user drag the map to see both.
+        const mobile = window.matchMedia("(max-width: 640px)").matches;
+        map.easeTo({
+          center: e.lngLat,
+          offset: mobile
+            ? [0, -Math.round(window.innerHeight * 0.28)]
+            : [Math.min(300, Math.round(window.innerWidth * 0.26)), 0],
+          duration: 500,
+        });
         const el = popup.getElement();
         const input = el.querySelector(".buyer-price");
         const result = el.querySelector(".buyer-result");
@@ -706,7 +725,10 @@ export default function App() {
           const price = Number(input.value.replace(/[^0-9]/g, ""));
           const ex = Object.fromEntries(Object.entries(exBoxes).map(([k, box]) => [k, box.checked]));
           const b = buyerEstimate(price, Number(p.rate), Number(p.isdr ?? 0), ex);
-          result.textContent = b != null ? `≈ ${fmtUSD(b)} / year (${fmtUSD(b / 12)}/mo)` : "—";
+          result.innerHTML =
+            b != null
+              ? `<span class="buyer-mo">≈ ${fmtUSD(b / 12)}/mo</span><span class="buyer-yr">${fmtUSD(b)}/yr</span>`
+              : "—";
         };
         input.addEventListener("input", update);
         for (const box of Object.values(exBoxes)) box.addEventListener("change", update);
@@ -905,8 +927,19 @@ function ComparePanel({ items, onClose, onRemove }) {
         <div className="compare-rowlabel">Market value</div>
         {cols.map((c, i) => <div key={i} className="compare-cell">{fmtUSD(c.p.mkt)}</div>)}
 
-        <div className="compare-rowlabel">Est. annual tax</div>
-        {cols.map((c, i) => <div key={i} className="compare-cell">{c.est ? fmtUSD(c.est) : "—"}</div>)}
+        <div className="compare-rowlabel">Est. tax</div>
+        {cols.map((c, i) => (
+          <div key={i} className="compare-cell">
+            {c.est ? (
+              <>
+                <strong>{fmtUSD(c.est / 12)}/mo</strong>
+                <span className="compare-yr">{fmtUSD(c.est)}/yr</span>
+              </>
+            ) : (
+              "—"
+            )}
+          </div>
+        ))}
 
         <div className="compare-rowlabel">School district</div>
         {cols.map((c, i) => <div key={i} className="compare-cell small">{c.p.isd || "—"}</div>)}
