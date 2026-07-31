@@ -3,9 +3,17 @@ import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import RATE_STATS from "./rate-stats.json";
+
+// Map-layer paint can't read CSS custom properties, so the two tokens the
+// canvas needs are mirrored here: --accent and --parcel-selected.
+const ACCENT = "#2F4858";
+const PARCEL_SELECTED = "#14161C";
+
+// ── choropleth ─────────────────────────────────────────────────────────
 // Sequential yellow-orange-red ramp (ColorBrewer YlOrRd 7-class) — low rates
-// cool yellow, high rates deep red. Domain: south-central TX nominal rates,
-// %/year (floor lowered from 1.3 to 1.0 for the low-tax Hill Country counties).
+// cool yellow, high rates deep red. Domain: TX nominal rates, %/year (floor
+// lowered from 1.3 to 1.0 for the low-tax Hill Country counties).
 const RATE_STOPS = [
   [1.0, "#ffffb2"],
   [1.27, "#fed976"],
@@ -16,6 +24,23 @@ const RATE_STOPS = [
   [2.6, "#b10026"],
 ];
 const rateColor = ["interpolate", ["linear"], ["get", "rate"], ...RATE_STOPS.flat()];
+const LEGEND_GRADIENT = `linear-gradient(to right, ${RATE_STOPS.map(([, c]) => c).join(",")})`;
+
+// The same interpolation in JS, so the card's swatch matches the colour the
+// parcel is actually painted with on the map.
+const rateSwatch = (rate) => {
+  const r = Math.min(Math.max(Number(rate), RATE_STOPS[0][0]), RATE_STOPS[RATE_STOPS.length - 1][0]);
+  let i = 0;
+  while (i < RATE_STOPS.length - 2 && r > RATE_STOPS[i + 1][0]) i++;
+  const [lo, loHex] = RATE_STOPS[i];
+  const [hi, hiHex] = RATE_STOPS[i + 1];
+  const t = hi === lo ? 0 : (r - lo) / (hi - lo);
+  const mix = (a, b) => Math.round(a + (b - a) * t);
+  const parse = (h) => [1, 3, 5].map((k) => parseInt(h.slice(k, k + 2), 16));
+  const [r1, g1, b1] = parse(loHex);
+  const [r2, g2, b2] = parse(hiHex);
+  return `rgb(${mix(r1, r2)},${mix(g1, g2)},${mix(b1, b2)})`;
+};
 
 const fmtUSD = (n) =>
   n?.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }) ?? "—";
@@ -227,6 +252,22 @@ const PARCEL_SOURCES = ARCHIVES.map((entry, i) => [
   typeof entry === "string" ? entry : entry.name,
   typeof entry === "string" ? null : entry.url,
 ]);
+const PARCEL_FILL_IDS = PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`);
+
+// Over imagery, thin the fills so the photo reads through (boundaries + rate
+// tint) and flip the parcel linework light for contrast against it.
+function applyBasemapMode(map, imagery) {
+  for (const id of PARCEL_FILL_IDS) {
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", imagery ? 0.22 : 0.7);
+  }
+  for (const id of ["county-fill", "isd-fill"]) {
+    if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", imagery ? 0.35 : 0.6);
+  }
+  for (const [suffix] of PARCEL_SOURCES) {
+    if (map.getLayer(`parcel-line${suffix}`))
+      map.setPaintProperty(`parcel-line${suffix}`, "line-color", imagery ? "#F5F2E8" : "#4A4943");
+  }
+}
 
 // Free federal raster services: USGS basemaps + FEMA National Flood Hazard
 // Layer (layer 28 = flood hazard zones, drawn via dynamic export tiles).
@@ -343,24 +384,45 @@ const buyerEstimate = (price, rate, isdRate, ex = {}) => {
   return nonSchool + school;
 };
 
-// Collapse-affordance icons for the panel headers.
-const Chevron = ({ up }) => (
-  <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
-    <path
-      d={up ? "M3 10l5-5 5 5" : "M3 6l5 5 5-5"}
-      fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round"
-    />
+// ── icons ──────────────────────────────────────────────────────────────
+// Stroked, 16px grid, weight matched to the MapLibre control glyphs. No
+// emoji anywhere in the UI: they render in a different family on every OS.
+const Icon = ({ d, size = 13, width = 1.7 }) => (
+  <svg
+    width={size} height={size} viewBox="0 0 16 16" aria-hidden="true"
+    fill="none" stroke="currentColor" strokeWidth={width}
+    strokeLinecap="round" strokeLinejoin="round"
+  >
+    {d.map((p, i) => <path key={i} d={p} />)}
   </svg>
 );
-const Burger = () => (
-  <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-    <path
-      d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"
-      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"
-    />
-  </svg>
-);
+const PATH = {
+  chevronUp: ["M3 10l5-5 5 5"],
+  chevronDown: ["M3 6l5 5 5-5"],
+  chevronRight: ["M6 3l5 5-5 5"],
+  burger: ["M2.5 4.5h11M2.5 8h11M2.5 11.5h11"],
+  close: ["M4 4l8 8M12 4l-8 8"],
+  plus: ["M8 3.5v9M3.5 8h9"],
+  check: ["M3.5 8.5l3 3 6-6"],
+  ruler: [
+    "M1.5 10.2L10.2 1.5l4.3 4.3-8.7 8.7z",
+    "M4.2 7.5l1.6 1.6M6.4 5.3l1.6 1.6M8.6 3.1l1.6 1.6",
+  ],
+  external: [
+    "M9.5 2.5h4v4",
+    "M13.5 2.5L7.5 8.5",
+    "M11.5 9.5v3.5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1h3.5",
+  ],
+};
+const Chevron = ({ up }) => <Icon d={up ? PATH.chevronUp : PATH.chevronDown} width={2} />;
+const Burger = () => <Icon d={PATH.burger} size={14} width={1.8} />;
+
+// Same icons as raw markup, for the popup HTML strings.
+const iconHTML = (key, size = 13) =>
+  `<svg width="${size}" height="${size}" viewBox="0 0 16 16" aria-hidden="true" fill="none" ` +
+  `stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">` +
+  PATH[key].map((p) => `<path d="${p}"/>`).join("") +
+  `</svg>`;
 
 const initialView = () => {
   const q = new URLSearchParams(location.search);
@@ -393,24 +455,13 @@ export default function App() {
   const measureRef = useRef({ on: false, pts: [] });
 
   // Basemap + flood visibility follow React state once layers exist.
+  const isImagery = basemap !== "map";
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.getLayer("basemap-sat")) return;
     map.setLayoutProperty("basemap-sat", "visibility", basemap === "sat" ? "visible" : "none");
     map.setLayoutProperty("basemap-topo", "visibility", basemap === "topo" ? "visible" : "none");
-    // Over imagery, thin the fills so the photo reads through (boundaries +
-    // rate tint); darken parcel lines for contrast against the photo.
-    const fillOp = basemap === "sat" ? 0.22 : 0.7;
-    const aggOp = basemap === "sat" ? 0.35 : 0.6;
-    for (const [suffix] of PARCEL_SOURCES) {
-      if (map.getLayer(`parcel-fill${suffix}`))
-        map.setPaintProperty(`parcel-fill${suffix}`, "fill-opacity", fillOp);
-      if (map.getLayer(`parcel-line${suffix}`))
-        map.setPaintProperty(`parcel-line${suffix}`, "line-color", basemap === "sat" ? "#f5f2e8" : "#4a4943");
-    }
-    for (const id of ["county-fill", "isd-fill"]) {
-      if (map.getLayer(id)) map.setPaintProperty(id, "fill-opacity", aggOp);
-    }
+    applyBasemapMode(map, isImagery);
   }, [basemap]);
   useEffect(() => {
     const map = mapRef.current;
@@ -653,7 +704,7 @@ export default function App() {
             "source-layer": "parcels",
             minzoom: 13,
             paint: {
-              "line-color": "#4a4943",
+              "line-color": "#4A4943",
               "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.3, 15, 0.75, 17, 1.5],
               "line-opacity": ["interpolate", ["linear"], ["zoom"], 13, 0.35, 16, 0.8],
             },
@@ -669,7 +720,7 @@ export default function App() {
             minzoom: 13,
             filter: NO_SELECTION,
             paint: {
-              "line-color": "#1849c6",
+              "line-color": PARCEL_SELECTED,
               "line-width": 3,
               "line-opacity": 0.95,
             },
@@ -685,8 +736,8 @@ export default function App() {
             "source-layer": "parcels",
             minzoom: 13,
             paint: {
-              "line-color": "#e0201d",
-              "line-width": 2.5,
+              "line-color": ACCENT,
+              "line-width": 2,
               "line-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 1, 0],
             },
           },
@@ -711,17 +762,17 @@ export default function App() {
       map.addLayer({
         id: "measure-fill", type: "fill", source: "measure",
         filter: ["==", ["get", "kind"], "fill"],
-        paint: { "fill-color": "#184f95", "fill-opacity": 0.14 },
+        paint: { "fill-color": ACCENT, "fill-opacity": 0.14 },
       });
       map.addLayer({
         id: "measure-line", type: "line", source: "measure",
         filter: ["==", ["get", "kind"], "line"],
-        paint: { "line-color": "#184f95", "line-width": 2.5, "line-dasharray": [1.6, 1.2] },
+        paint: { "line-color": ACCENT, "line-width": 2.5, "line-dasharray": [1.6, 1.2] },
       });
       map.addLayer({
         id: "measure-pts", type: "circle", source: "measure",
         filter: ["==", ["get", "kind"], "pt"],
-        paint: { "circle-radius": 4.5, "circle-color": "#184f95", "circle-stroke-color": "#fff", "circle-stroke-width": 1.5 },
+        paint: { "circle-radius": 4.5, "circle-color": ACCENT, "circle-stroke-color": "#FFFFFF", "circle-stroke-width": 1.5 },
       });
 
       let hovered = null;
@@ -779,7 +830,7 @@ export default function App() {
             : "";
         const jur = jurisdictionRows(p);
         const verifiedBadge = jur && jur.verified
-          ? `<span class="verified-badge" title="Exact taxing-unit stack from the county appraisal roll">✓ roll-verified</span>`
+          ? `<span class="verified-badge" title="Exact taxing-unit stack from the county appraisal roll">${iconHTML("check", 10)} Roll-verified</span>`
           : "";
         const jurHtml = jur
           ? `<details class="breakdown"${jur.verified ? " open" : ""}><summary>Jurisdiction breakdown${verifiedBadge}</summary>
@@ -795,15 +846,31 @@ export default function App() {
           : "";
         const cad = cadHref(p);
         const cadHtml = cad
-          ? `<a class="cad-link" href="${cad.url}" target="_blank" rel="noopener">View on ${cad.name} ↗</a>`
+          ? `<a class="cad-link" href="${cad.url}" target="_blank" rel="noopener">View on ${cad.name} ${iconHTML("external", 12)}</a>`
+          : "";
+        // The ramp reads absolute; this line gives the local frame of
+        // reference, which is what a buyer actually compares against.
+        const cs = RATE_STATS.counties[p.cty];
+        const deltaHtml = cs
+          ? (() => {
+              const d = Number(p.rate) - cs[0];
+              const at = Math.abs(d) < 0.05;
+              const phrase = at
+                ? "about at"
+                : `${Math.abs(d).toFixed(2)} pts ${d > 0 ? "above" : "below"}`;
+              return `<span class="card-delta">
+                        <span class="delta-dot" style="background:${rateSwatch(p.rate)}"></span>
+                        ${phrase} the ${p.cty} County median (${cs[0].toFixed(2)}%)
+                      </span>`;
+            })()
           : "";
         const popup = new maplibregl.Popup({ maxWidth: "340px", className: "parcel-popup" })
           .setLngLat(e.lngLat)
           .setHTML(
             `<div class="card">
               <div class="card-addr">${p.addr || "(no situs address)"}</div>
-              <div class="card-rate">${Number(p.rate).toFixed(4)}%<span> nominal rate</span></div>
-              <button class="compare-btn">＋ Compare this property</button>
+              <div class="card-rate">${Number(p.rate).toFixed(4)}%<span>nominal rate</span>${deltaHtml}</div>
+              <button class="btn compare-btn">${iconHTML("plus")} Compare this property</button>
               <table>
                 <tr><td>Owner</td><td>${p.own || "—"}</td></tr>
                 <tr><td>Lot size</td><td>${fmtAcres(p.ac)}</td></tr>
@@ -816,20 +883,19 @@ export default function App() {
                 <tr><td>Property ID</td><td>${p.id && p.id !== "0" ? p.id : "—"}</td></tr>
               </table>
               <div class="buyer">
-                <div class="buyer-title">Buyer estimate</div>
+                <div class="buyer-title">Buyer Property Tax Projection</div>
                 <label class="buyer-price-card">
-                  <span class="buyer-price-label">Enter Proposed Purchase Price</span>
+                  <span class="buyer-price-label">Enter proposed purchase price</span>
                   <span class="buyer-price-field">
                     <span class="buyer-price-dollar">$</span>
-                    <input type="text" inputmode="numeric" class="buyer-price" value="${defaultPrice.toLocaleString("en-US")}" aria-label="Proposed purchase price">
-                    <span class="buyer-price-pencil" aria-hidden="true">✎</span>
+                    <input type="text" inputmode="numeric" class="field buyer-price" value="${defaultPrice.toLocaleString("en-US")}" aria-label="Proposed purchase price">
                   </span>
                 </label>
                 <div class="buyer-ex">
-                  <label><input type="checkbox" class="ex-homestead" checked> Homestead ($140k school)</label>
-                  <label><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$60k school)</label>
-                  <label><input type="checkbox" class="ex-localopt"> Local-option 20% (county/city)</label>
-                  <label><input type="checkbox" class="ex-vet"> 100% disabled veteran</label>
+                  <label class="check"><input type="checkbox" class="ex-homestead" checked> Homestead ($140k school)</label>
+                  <label class="check"><input type="checkbox" class="ex-over65"> Over-65 / disabled (+$60k school)</label>
+                  <label class="check"><input type="checkbox" class="ex-localopt"> Local-option 20% (county/city)</label>
+                  <label class="check"><input type="checkbox" class="ex-vet"> 100% disabled veteran</label>
                 </div>
                 <div class="buyer-result"></div>
                 <div class="card-note">Exemption amounts are statewide defaults; local adoption varies by entity</div>
@@ -887,14 +953,24 @@ export default function App() {
         popup.on("close", () => setSelection(NO_SELECTION));
       };
       for (const [suffix] of PARCEL_SOURCES) map.on("click", `parcel-fill${suffix}`, onParcelClick);
-      const aggregateCard = (label) => (e) => {
+      const aggregateCard = (label, stats, anchorName) => (e) => {
         const p = e.features[0].properties;
+        const d = Number(p.rate) - stats.median;
+        const at = Math.abs(d) < 0.05;
+        const phrase = at
+          ? "about at"
+          : `${Math.abs(d).toFixed(2)} pts ${d > 0 ? "above" : "below"}`;
         new maplibregl.Popup({ maxWidth: "300px" })
           .setLngLat(e.lngLat)
           .setHTML(
             `<div class="card">
               <div class="card-addr">${p.name}${label}</div>
-              <div class="card-rate">${Number(p.rate).toFixed(4)}%<span> median rate</span></div>
+              <div class="card-rate">${Number(p.rate).toFixed(4)}%<span>median rate</span>
+                <span class="card-delta">
+                  <span class="delta-dot" style="background:${rateSwatch(p.rate)}"></span>
+                  ${phrase} the ${anchorName} (${stats.median.toFixed(2)}%)
+                </span>
+              </div>
               <table>
                 <tr><td>Parcels</td><td>${Number(p.parcels).toLocaleString()}</td></tr>
                 <tr><td>Median value</td><td>${fmtUSD(p.med_value)}</td></tr>
@@ -905,9 +981,13 @@ export default function App() {
       };
       map.on("click", "isd-fill", (e) => {
         if (map.getZoom() >= 13) return;
-        aggregateCard("")(e);
+        aggregateCard("", RATE_STATS.isd, "statewide district median")(e);
       });
-      map.on("click", "county-fill", aggregateCard(" County"));
+      map.on(
+        "click",
+        "county-fill",
+        aggregateCard(" County", RATE_STATS.county, "statewide county median")
+      );
       for (const id of [...PARCEL_SOURCES.map(([s]) => `parcel-fill${s}`), "isd-fill", "county-fill"]) {
         map.on("mouseenter", id, () => {
           if (!measureRef.current.on) map.getCanvas().style.cursor = "pointer";
@@ -932,7 +1012,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app">
+    <div className={`app${isImagery ? " basemap-imagery" : ""}`}>
       <div ref={mapDiv} className="map" />
       <header className={`topbar${menuOpen ? "" : " closed"}`}>
         <button
@@ -941,18 +1021,20 @@ export default function App() {
           aria-expanded={menuOpen}
           aria-label={menuOpen ? "Collapse menu" : "Open menu"}
         >
-          <h1>Texas Property Tax Map</h1>
+          <h1 className="topbar__title">Texas Property Tax Map</h1>
           <span className="menu-icon">{menuOpen ? <Chevron up /> : <Burger />}</span>
         </button>
         {menuOpen && (
         <>
-        <span className="badge">2025 tax year · jurisdictions approximate</span>
+        <p className="topbar__meta">2025 tax year · jurisdictions approximate</p>
         <div className="search">
-          <div className="search-modes">
+          <div className="seg" role="group" aria-label="Search by">
             {[["address", "Address"], ["owner", "Owner"], ["id", "Property ID"]].map(([m, label]) => (
               <button
                 key={m}
-                className={searchMode === m ? "on" : ""}
+                type="button"
+                className="seg__item"
+                aria-pressed={searchMode === m}
                 onClick={() => {
                   setSearchMode(m);
                   setQuery("");
@@ -964,7 +1046,8 @@ export default function App() {
             ))}
           </div>
           <input
-            className="search-input"
+            className="field"
+            type="text"
             value={query}
             placeholder={
               searchMode === "address"
@@ -990,22 +1073,33 @@ export default function App() {
           )}
         </div>
         <div className="menu-layers">
-          <div className="menu-sub">Layers</div>
-          <div className="basemap-row">
+          <span className="section-label">Layers</span>
+          <div className="seg" role="group" aria-label="Basemap">
             {[["map", "Map"], ["sat", "Satellite"], ["topo", "Topo"]].map(([v, label]) => (
-              <label key={v}>
-                <input type="radio" name="basemap" checked={basemap === v} onChange={() => setBasemap(v)} />
+              <button
+                key={v}
+                type="button"
+                className="seg__item"
+                aria-pressed={basemap === v}
+                onClick={() => setBasemap(v)}
+              >
                 {label}
-              </label>
+              </button>
             ))}
           </div>
           <div className="layer-row">
-            <label>
+            <label className="check">
               <input type="checkbox" checked={flood} onChange={(e) => setFlood(e.target.checked)} />
               FEMA flood zones
             </label>
-            <button className={`measure-btn${measuring ? " on" : ""}`} onClick={toggleMeasure}>
-              {measuring ? "✕ Stop" : "📏 Measure"}
+            <button
+              type="button"
+              className={`tool-btn${measuring ? " is-active" : ""}`}
+              aria-pressed={measuring}
+              onClick={toggleMeasure}
+            >
+              <Icon d={measuring ? PATH.close : PATH.ruler} />
+              {measuring ? "Stop" : "Measure"}
             </button>
           </div>
           {measuring && (
@@ -1022,39 +1116,44 @@ export default function App() {
           aria-expanded={legendOpen}
           aria-label={legendOpen ? "Collapse legend" : "Open legend"}
         >
-          <span className="legend-title">{legendOpen ? "Nominal tax rate (% of value)" : "Legend"}</span>
+          <span className="legend__title">
+            {legendOpen ? "Nominal tax rate (% of value)" : "Legend"}
+          </span>
           <span className="menu-icon small">
             <Chevron up={legendOpen} />
           </span>
         </button>
         {legendOpen && (
           <>
-            <div
-              className="legend-bar"
-              style={{ background: `linear-gradient(to right, ${RATE_STOPS.map(([, c]) => c).join(",")})` }}
-            />
-            <div className="legend-labels">
-              <span>{RATE_STOPS[0][0]}%</span>
-              <span>{RATE_STOPS[RATE_STOPS.length - 1][0]}%</span>
+            <div className="legend__ramp" style={{ background: LEGEND_GRADIENT }} />
+            <div className="legend__scale">
+              <span>{RATE_STOPS[0][0].toFixed(1)}%</span>
+              <span />
+              <span>{RATE_STOPS[RATE_STOPS.length - 1][0].toFixed(1)}%</span>
             </div>
-            <div className="legend-hint">Zoom in past the district level to see individual parcels</div>
+            <p className="legend__hint">Zoom in past the district level to see individual parcels</p>
           </>
         )}
       </div>
-      {status && <div className="status">{status}</div>}
+      {status && <div className="status glass">{status}</div>}
 
       {compareList.length > 0 && !compareOpen && (
-        <div className="compare-tray">
+        <div className="compare-tray glass">
           {compareList.map((c, i) => (
             <span key={i} className="compare-chip">
               {(c.addr || c.id || "parcel").split(",")[0]}
-              <button onClick={() => removeCompare(i)} aria-label="remove">✕</button>
+              <button className="icon-btn" onClick={() => removeCompare(i)} aria-label="Remove from compare">
+                <Icon d={PATH.close} size={11} width={2} />
+              </button>
             </span>
           ))}
           {compareList.length === 1 ? (
             <span className="compare-hint">Pick another property to compare</span>
           ) : (
-            <button className="compare-open" onClick={() => setCompareOpen(true)}>Compare →</button>
+            <button className="btn compare-open" onClick={() => setCompareOpen(true)}>
+              Compare
+              <Icon d={PATH.chevronRight} size={12} />
+            </button>
           )}
         </div>
       )}
@@ -1078,17 +1177,19 @@ function ComparePanel({ items, onClose, onRemove }) {
   const labels = [...new Set(cols.flatMap((c) => [...c.units.keys()]))];
   const rate = (n) => `${Number(n).toFixed(4)}%`;
   return (
-    <div className="compare-panel">
+    <div className="compare-panel glass">
       <div className="compare-head">
         <strong>Compare properties</strong>
-        <button className="compare-close" onClick={onClose}>✕</button>
+        <button className="icon-btn" onClick={onClose} aria-label="Close comparison">
+          <Icon d={PATH.close} size={12} width={1.8} />
+        </button>
       </div>
       <div className="compare-grid" style={{ "--cols": cols.length }}>
         <div className="compare-rowlabel" />
         {cols.map((c, i) => (
           <div key={i} className="compare-colhead">
             <div className="compare-addr">{c.p.addr || `Property ${i + 1}`}</div>
-            <div className="compare-sub">{c.p.cty} County{c.p.rv ? " · ✓ roll-verified" : ""}</div>
+            <div className="compare-sub">{c.p.cty} County{c.p.rv ? " · roll-verified" : ""}</div>
             <button className="compare-remove" onClick={() => onRemove(i)}>Remove</button>
           </div>
         ))}

@@ -1,0 +1,341 @@
+/* ============================================================
+   Texas Property Tax Map — premium UI layer
+   Load AFTER maplibre-gl.css and after your own styles.
+   Ramp: slate to oxblood, diverging, anchored at county median.
+
+   Vendored token sheet — authoritative for color, type, radius, shadow and
+   blur. Keep app layout in index.css; edit values here only.
+   The Geist @import lives in index.html <head> instead (preconnect + no
+   bundler hoisting).
+   ============================================================ */
+
+:root {
+  --font-ui: 'Geist', 'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* ---- Ink + surface -------------------------------------- */
+  --ink-900: #14161C;
+  --ink-700: #3A3F4A;
+  --ink-500: #6B7280;
+  --ink-400: #8A909C;
+  --accent:  #2F4858;
+  --accent-ink: #FAFAF8;
+
+  /* ---- Glass ---------------------------------------------- */
+  --glass-bg:        rgba(252, 251, 248, 0.72);
+  --glass-bg-strong: rgba(252, 251, 248, 0.86);
+  --glass-blur:      blur(20px) saturate(180%);
+  --glass-edge:      rgba(255, 255, 255, 0.65);
+
+  --btn-bg:       rgba(255, 255, 255, 0.55);
+  --btn-bg-hover: rgba(255, 255, 255, 0.78);
+  --btn-blur:     blur(12px) saturate(160%);
+  --btn-edge:     rgba(16, 18, 27, 0.10);
+  --btn-gloss:    inset 0 1px 0 rgba(255, 255, 255, 0.85);
+
+  --btn-on-bg:    rgba(47, 72, 88, 0.86);
+  --btn-on-edge:  rgba(255, 255, 255, 0.18);
+  --btn-on-gloss: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+
+  /* ---- Depth: three layers, not one ----------------------- */
+  --shadow-panel:
+    0 0 0 0.5px rgba(16, 18, 27, 0.10),
+    0 1px 2px   rgba(16, 18, 27, 0.06),
+    0 10px 32px -10px rgba(16, 18, 27, 0.22);
+  --shadow-btn:    0 1px 2px rgba(16, 18, 27, 0.05);
+  --shadow-btn-on: 0 2px 8px -2px rgba(16, 18, 27, 0.35);
+
+  /* ---- Radius: one scale, nested -------------------------- */
+  --r-sm: 7px;
+  --r-md: 11px;
+  --r-lg: 15px;
+  --r-pill: 999px;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur:  160ms;
+
+  /* ---- CHOROPLETH ----------------------------------------
+     Class 3 is the median band. Classes 0-2 are below median,
+     4-6 above. JS reads these; do not hardcode hex in the
+     layer definitions.
+     -------------------------------------------------------- */
+  --ramp-0: #2B3B4A;   /* far below median */
+  --ramp-1: #5C7185;
+  --ramp-2: #AEBAC5;
+  --ramp-3: #EDEAE4;   /* median */
+  --ramp-4: #DFB6B4;
+  --ramp-5: #A85F5C;
+  --ramp-6: #66302E;   /* far above median */
+
+  /* Imagery variant: only the two extremes lift, so the ramp
+     keeps its shape but stops merging into dark terrain. */
+  --ramp-0-imagery: #40556B;
+  --ramp-6-imagery: #8F4744;
+
+  --fill-light:          0.84;
+  --fill-imagery:        0.55;
+  --fill-imagery-median: 0.12;
+  --stroke-light:   rgba(255, 255, 255, 0.65);
+  --stroke-imagery: rgba(255, 255, 255, 0.55);
+
+  --parcel-selected: #14161C;
+}
+
+/* ============================================================
+   BASE
+   ============================================================ */
+body,
+.maplibregl-map {
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Every number here changes as you pan. Tabular figures stop
+   them jittering. */
+.legend, .legend *,
+.popup-value, .stat,
+input[type='text'], input[type='search'] {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* ============================================================
+   GLASS SURFACES
+   ============================================================ */
+.topbar, .legend, .glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-panel);
+  color: var(--ink-700);
+}
+
+.topbar { padding: 14px 16px; width: 336px; }
+
+/* Add .basemap-imagery to the app root when satellite or topo
+   is active. Imagery is dark and busy; raise opacity. */
+.basemap-imagery .topbar,
+.basemap-imagery .legend,
+.basemap-imagery .glass { background: var(--glass-bg-strong); }
+
+/* ============================================================
+   TYPE SCALE
+   ============================================================ */
+.topbar__title {
+  font-size: 15px; font-weight: 600;
+  letter-spacing: -0.021em; color: var(--ink-900); margin: 0;
+}
+.topbar__meta {
+  font-size: 11px; font-weight: 450;
+  letter-spacing: 0.004em; color: var(--ink-400); margin: 3px 0 0;
+}
+/* Tracked micro-caps are the strongest "designed" signal in a
+   control panel. Never set caps without tracking. */
+.section-label {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--ink-400); display: block; margin: 16px 0 7px;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.btn, .seg__item, .tool-btn {
+  font: 500 12px/1 var(--font-ui);
+  letter-spacing: -0.004em;
+  color: var(--ink-700);
+  background: var(--btn-bg);
+  -webkit-backdrop-filter: var(--btn-blur);
+  backdrop-filter: var(--btn-blur);
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  box-shadow: var(--btn-gloss), var(--shadow-btn);
+  min-height: 32px; padding: 0 12px; cursor: pointer;
+  transition: background var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease),
+              transform var(--dur) var(--ease);
+}
+.btn:hover, .seg__item:hover, .tool-btn:hover { background: var(--btn-bg-hover); }
+.btn:active, .seg__item:active, .tool-btn:active { transform: scale(0.98); }
+
+.btn[aria-pressed='true'],
+.seg__item[aria-pressed='true'],
+.seg__item.is-active,
+.tool-btn.is-active {
+  background: var(--btn-on-bg);
+  border-color: var(--btn-on-edge);
+  box-shadow: var(--btn-on-gloss), var(--shadow-btn-on);
+  color: var(--accent-ink);
+}
+
+/* Segmented control: one shell, hairline dividers, no gaps. */
+.seg {
+  display: flex; border-radius: var(--r-md); overflow: hidden;
+  border: 1px solid var(--btn-edge);
+  box-shadow: var(--btn-gloss), var(--shadow-btn);
+  background: var(--btn-bg);
+  -webkit-backdrop-filter: var(--btn-blur);
+  backdrop-filter: var(--btn-blur);
+}
+.seg__item {
+  flex: 1; border: 0; border-radius: 0; box-shadow: none;
+  background: transparent;
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+}
+.seg__item + .seg__item { border-left: 1px solid var(--btn-edge); }
+
+/* ============================================================
+   INPUT
+   ============================================================ */
+.field {
+  width: 100%; min-height: 36px; padding: 0 12px;
+  font: 400 14px/1 var(--font-ui);
+  letter-spacing: -0.006em; color: var(--ink-900);
+  background: rgba(255, 255, 255, 0.62);
+  -webkit-backdrop-filter: var(--btn-blur);
+  backdrop-filter: var(--btn-blur);
+  border: 1px solid var(--btn-edge);
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 1px 2px rgba(16, 18, 27, 0.05);
+  transition: border-color var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease);
+}
+.field::placeholder { color: var(--ink-400); }
+.field:focus {
+  outline: none;
+  border-color: rgba(47, 72, 88, 0.45);
+  box-shadow: inset 0 1px 2px rgba(16, 18, 27, 0.04),
+              0 0 0 3px rgba(47, 72, 88, 0.13);
+}
+
+/* ============================================================
+   CHECKBOXES
+   ============================================================ */
+.check {
+  display: flex; align-items: center; gap: 9px;
+  min-height: 28px; font-size: 13px; font-weight: 450;
+  color: var(--ink-700); cursor: pointer;
+}
+.check input[type='checkbox'] {
+  appearance: none; width: 16px; height: 16px; margin: 0; flex: none;
+  border: 1px solid rgba(16, 18, 27, 0.22);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: all var(--dur) var(--ease);
+}
+.check input[type='checkbox']:checked {
+  background: var(--btn-on-bg); border-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23FAFAF8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
+  background-size: 100%;
+}
+
+/* ============================================================
+   LEGEND
+   ============================================================ */
+.legend { padding: 12px 14px; width: 248px; }
+.legend__title {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--ink-400); margin: 0 0 8px;
+}
+.legend__ramp {
+  display: flex; height: 8px; border-radius: var(--r-pill);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 0.5px rgba(16, 18, 27, 0.12);
+}
+.legend__ramp > span { flex: 1; }
+.legend__scale {
+  display: flex; justify-content: space-between; margin-top: 6px;
+  font-size: 11px; font-weight: 500; color: var(--ink-500);
+}
+.legend__scale .is-median { color: var(--ink-900); }
+.legend__hint {
+  margin: 9px 0 0; font-size: 11px; line-height: 1.45; color: var(--ink-400);
+}
+
+/* ============================================================
+   MAPLIBRE CONTROL OVERRIDES
+   These ship as bare 29px Arial squares and are the most
+   looked-at buttons on the map. Restyle or the pass reads
+   as half-finished.
+   ============================================================ */
+.maplibregl-ctrl-group {
+  background: var(--glass-bg) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-md) !important;
+  box-shadow: var(--shadow-panel) !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button {
+  width: 34px !important; height: 34px !important;
+  background-color: transparent !important;
+  transition: background-color var(--dur) var(--ease);
+}
+.maplibregl-ctrl-group button:hover { background-color: rgba(16, 18, 27, 0.06) !important; }
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--btn-edge) !important; }
+
+.maplibregl-ctrl-attrib {
+  background: rgba(252, 251, 248, 0.62) !important;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-radius: var(--r-pill) 0 0 0;
+  font-size: 10px !important; padding: 3px 9px !important;
+}
+.maplibregl-ctrl-attrib a { color: var(--ink-400) !important; }
+
+.maplibregl-popup-content {
+  background: var(--glass-bg-strong) !important;
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--r-lg) !important;
+  box-shadow: var(--shadow-panel) !important;
+  padding: 13px 15px !important;
+  font-family: var(--font-ui);
+}
+.maplibregl-popup-tip { display: none; }
+
+/* ============================================================
+   FOCUS
+   ============================================================ */
+:where(button, input, a, [tabindex]):focus-visible {
+  outline: 2px solid rgba(47, 72, 88, 0.75);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ============================================================
+   FALLBACK — without this, no-backdrop-filter browsers render
+   the panels nearly transparent and the app looks broken.
+   ============================================================ */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .topbar, .legend, .glass,
+  .maplibregl-ctrl-group,
+  .maplibregl-popup-content { background: rgba(252, 251, 248, 0.97) !important; }
+  .btn, .seg, .tool-btn, .field { background: rgba(255, 255, 255, 0.96); }
+}
+
+/* ============================================================
+   TOUCH — the app ships mobile-web-app meta tags, so today's
+   20px controls fail on every phone.
+   ============================================================ */
+@media (pointer: coarse) {
+  .btn, .seg__item, .tool-btn { min-height: 44px; font-size: 13px; }
+  .field { min-height: 44px; font-size: 16px; } /* 16px stops iOS zoom-on-focus */
+  .maplibregl-ctrl-group button { width: 44px !important; height: 44px !important; }
+  .check { min-height: 40px; }
+  .check input[type='checkbox'] { width: 20px; height: 20px; }
+}
+
+@media (max-width: 640px) {
+  .topbar { width: calc(100vw - 24px); }
+  .legend { width: calc(100vw - 24px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
