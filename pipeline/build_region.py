@@ -768,8 +768,16 @@ def _adjacency_by_ptad(con):
 
 
 def _load_water_districts(con, bbox=None):
-    """(Re)load active TCEQ water-district polygons, region-clipped. bbox may
-    be None in --rates-only mode; then it's derived from county_bounds."""
+    """(Re)load TCEQ water-district polygons, region-clipped. bbox may be
+    None in --rates-only mode; then it's derived from county_bounds.
+
+    Don't filter on TCEQ's STATUS field: it doesn't track whether a district
+    is currently levying tax (e.g. Comal's Johnson Ranch MUD is STATUS='I'
+    there yet carries a real nonzero 2025 PTAD rate). Whether a district
+    actually taxes a parcel is decided downstream in
+    _attach_special_districts, which only attaches units with a matching
+    nonzero PTAD rate — so an inactive/defunct district with no PTAD rate
+    still contributes nothing."""
     if bbox is None:
         xmin, ymin, xmax, ymax = con.execute(
             """SELECT min(ST_XMin(geom)) - 0.1, min(ST_YMin(geom)) - 0.1,
@@ -782,7 +790,7 @@ def _load_water_districts(con, bbox=None):
             f"""CREATE OR REPLACE TABLE water_districts AS
             SELECT NAME AS wd_name, TYPE AS wd_type, geom
             FROM ST_Read('{WATER_DISTRICTS}')
-            WHERE STATUS = 'A' AND ST_Intersects(geom, {bbox})"""
+            WHERE ST_Intersects(geom, {bbox})"""
         )
         print("water districts:", con.execute("SELECT count(*) FROM water_districts").fetchone()[0])
     else:
