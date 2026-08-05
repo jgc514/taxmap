@@ -815,12 +815,56 @@ def _attach_special_districts(con, wd_rates, ptad_of, base_ids):
         return
 
     # One expensive point-in-polygon pass → parcel uid × district name.
+    # The point-in-polygon pass depends only on parcels_all and
+    # water_districts, neither of which --rates-only touches, so a previous
+    # run's parcel_wd is still exactly right. Reuse it unless forced: this is
+    # by far the most expensive step in the build.
+    reuse_wd = "--rebuild-wd" not in sys.argv and con.execute(
+        """SELECT count(*) FROM information_schema.tables
+           WHERE table_name = 'parcel_wd'""").fetchone()[0] > 0
+    if reuse_wd:
+        n_wd = con.execute("SELECT count(*) FROM parcel_wd").fetchone()[0]
+        reuse_wd = n_wd > 0
+        if reuse_wd:
+            print(f"special districts: reusing existing parcel_wd "
+                  f"({n_wd:,} parcel-district rows; --rebuild-wd to redo)")
+
+    if not reuse_wd:
+        _join_parcels_to_districts(con)
+
+    # Resolve each distinct (parcel county, district name) → a PTAD taxing unit
+    _finish_special_districts(con, wd_rates, ptad_of, base_ids)
+
+
+def _join_parcels_to_districts(con):
+    """The point-in-polygon pass: parcel uid × water-district name."""
+    # Materialise the representative point ONCE per parcel. Left inside the
+    # join predicate, ST_PointOnSurface(p.geom) is re-evaluated for every
+    # (parcel, district) pair the join considers — 13.8M parcels against ~1.5k
+    # district polygons is up to ~20 billion polygon centroid computations, and
+    # it ran for 22 hours without finishing. Computing 13.8M points up front
+    # and joining on a plain point column is the same answer.
+    con.execute(
+        """CREATE OR REPLACE TABLE parcel_pt AS
+        SELECT uid, county, ST_PointOnSurface(geom) AS pt FROM parcels_all"""
+    )
+    # An RTree over the district polygons lets the join filter by bounding box
+    # instead of testing every pair. Guarded: older spatial builds lack it, and
+    # the join is still correct (just slower) without.
+    try:
+        con.execute("CREATE INDEX IF NOT EXISTS water_districts_geom "
+                    "ON water_districts USING RTREE (geom)")
+    except Exception as e:  # noqa: BLE001
+        print(f"  (no RTree index on water_districts: {type(e).__name__})")
     con.execute(
         """CREATE OR REPLACE TABLE parcel_wd AS
         SELECT p.uid, p.county, w.wd_name
-        FROM parcels_all p JOIN water_districts w
-          ON ST_Within(ST_PointOnSurface(p.geom), w.geom)"""
+        FROM parcel_pt p JOIN water_districts w
+          ON ST_Within(p.pt, w.geom)"""
     )
+
+
+def _finish_special_districts(con, wd_rates, ptad_of, base_ids):
     # Resolve each distinct (parcel county, district name) → a PTAD taxing unit
     # in that county. Skip units already in the county base (FCD/hospital/port
     # etc. would otherwise be double-counted across the whole county).
