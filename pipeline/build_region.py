@@ -514,6 +514,15 @@ def norm_wd(name: str) -> str:
     s = s.replace("levee improvement district", "lid")
     s = s.replace("municipal management district", "mmd")
     s = s.replace("management district", "mmd")
+    # Special/public improvement districts: TCEQ registers them under their
+    # legal Water Code name ("Cibolo Canyon Conservation and Improvement
+    # District 1") while PTAD lists the short form ("Cibolo Canyon SID").
+    # Without this the district — 0.54159 per $100 in Bexar, one of the largest
+    # special rates in the state — never attaches to a parcel.
+    s = s.replace("conservation and improvement district", "sid")
+    s = s.replace("special improvement district", "sid")
+    s = s.replace("public improvement district", "pid")
+    s = re.sub(r"\bspecial id\b", "sid", s)
     s = re.sub(r"\bnumber\b|\bno\b", "", s)
     s = s.replace("#", "")
     return re.sub(r"[^a-z0-9]", "", s)
@@ -868,10 +877,26 @@ def _finish_special_districts(con, wd_rates, ptad_of, base_ids):
     # Resolve each distinct (parcel county, district name) → a PTAD taxing unit
     # in that county. Skip units already in the county base (FCD/hospital/port
     # etc. would otherwise be double-counted across the whole county).
+
+    # Secondary index with trailing digits removed, for the case where TCEQ
+    # numbers a district that PTAD does not ("… Improvement District 1" vs
+    # "… SID"). Only consulted when it resolves to exactly ONE unit in that
+    # county, so numbered siblings like MUD #4 / MUD #6 — which collapse to the
+    # same key — can never be matched by it.
+    alt = {}
+    for (cc, key), val in wd_rates.items():
+        alt.setdefault((cc, re.sub(r"\d+$", "", key)), []).append(val)
+
     pairs = con.execute("SELECT DISTINCT county, wd_name FROM parcel_wd").fetchall()
-    rated, skipped_base = [], 0
+    rated, skipped_base, by_alt = [], 0, 0
     for county, wd_name in pairs:
-        hit = wd_rates.get((ptad_of.get(county), norm_wd(wd_name)))
+        code = ptad_of.get(county)
+        hit = wd_rates.get((code, norm_wd(wd_name)))
+        if not hit:
+            cands = alt.get((code, re.sub(r"\d+$", "", norm_wd(wd_name))), [])
+            if len(cands) == 1:
+                hit = cands[0]
+                by_alt += 1
         if not hit:
             continue
         if hit[0] in base_ids.get(ptad_of.get(county), ()):  # already in base
@@ -884,7 +909,8 @@ def _finish_special_districts(con, wd_rates, ptad_of, base_ids):
     )
     con.executemany("INSERT INTO wd_rate_map VALUES (?,?,?,?,?)", rated)
     print(f"special districts: {len(pairs)} parcel-districts, {len(rated)} matched "
-          f"to a taxing unit ({skipped_base} skipped as already-in-base)")
+          f"to a taxing unit ({skipped_base} skipped as already-in-base, "
+          f"{by_alt} via the digit-stripped fallback)")
 
     # Sum DISTINCT units per parcel (dedupe overlapping polygons → same unit).
     con.execute(
